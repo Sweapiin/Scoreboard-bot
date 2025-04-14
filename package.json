@@ -4,20 +4,21 @@
     "description": "A Discord bot for tracking BO7 scores with Rocket League ranks",
     "main": "bot.js",
     "scripts": {
-        "start": "node bot.js"
+      "start": "node bot.js"
     },
     "keywords": [
-        "discord",
-        "bot",
-        "scoreboard",
-        "rocket-league"
+      "discord",
+      "bot",
+      "scoreboard",
+      "rocket-league"
     ],
     "author": "",
     "license": "MIT",
     "dependencies": {
-        "discord.js": "^14.18.0"
+      "discord.js": "^14.11.0",
+      "dotenv": "^16.3.1"
     },
     "engines": {
-        "node": ">=16.9.0"
+      "node": ">=16.9.0"
     }
-}
+  }

@@ -4,9 +4,15 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 
+// Try to load environment variables from .env file if dotenv is available
+try {
+    require('dotenv').config();
+} catch (error) {
+    console.log('dotenv module not found, skipping .env file loading');
+}
+
 // Bot configuration
 const config = {
-    token: 'MTM2MTI2NTQxOTMzOTY5NDEzMA.Gq2Pnh.g9Sb9Xd6LaeHWWBWFinSlVgNmwN3wIe1soTl9s', // Replace with your bot token
     prefix: '!', // Command prefix
     adminRoleName: process.env.ADMIN_ROLE_NAME || 'Admin', // Admin role name, can be set via environment variable
 };
@@ -287,7 +293,13 @@ server.listen(PORT, () => {
 });
 
 // Login to Discord
-client.login(config.token || process.env.DISCORD_TOKEN);
+if (!process.env.DISCORD_TOKEN) {
+    console.error('DISCORD_TOKEN environment variable is not set!');
+    console.error('Please set your discord token as an environment variable or in a .env file');
+    process.exit(1);
+}
+
+client.login(process.env.DISCORD_TOKEN);
 
 // Log a message about admin role configuration
 console.log(`Bot is configured to recognize users with the "${config.adminRoleName}" role as admins`);
