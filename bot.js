@@ -13,7 +13,7 @@ try {
 
 // Bot configuration
 const config = {
-    prefix: '!', // Command prefix
+    prefix: '/scoreboard', // More unique command prefix
     adminRoleName: process.env.ADMIN_ROLE_NAME || 'Admin', // Admin role name, can be set via environment variable
 };
 
@@ -109,6 +109,7 @@ client.on('messageCreate', async (message) => {
                 { name: `${config.prefix}help`, value: 'Shows this help message' },
                 { name: `${config.prefix}stats [user]`, value: 'Shows stats for a user (or yourself if no user is specified)' },
                 { name: `${config.prefix}leaderboard [rank]`, value: 'Shows leaderboard for all ranks or a specific rank' },
+                { name: `${config.prefix}overview`, value: 'Shows a comprehensive overview of all users and their wins across all ranks' },
                 { name: '**Admin Commands**', value: 'The following commands require admin privileges:' },
                 { name: `${config.prefix}addwin <user> <rank>`, value: 'Adds a win for a user in the specified rank' },
                 { name: `${config.prefix}removewin <user> <rank>`, value: 'Removes a win for a user in the specified rank' },
@@ -210,6 +211,72 @@ client.on('messageCreate', async (message) => {
             }
         }
 
+        message.reply({ embeds: [embed] });
+        return;
+    }
+    
+    // Overview command - shows all users and their wins across all ranks in a table format
+    if (command === 'overview') {
+        // Get all users who have at least one win
+        const userIds = Object.keys(data.scores).filter(userId => {
+            return RANKS.some(rank => (data.scores[userId][rank] || 0) > 0);
+        });
+        
+        if (userIds.length === 0) {
+            message.reply('No scores recorded yet.');
+            return;
+        }
+        
+        // Create an overview embed
+        const embed = new EmbedBuilder()
+            .setColor('#0099ff')
+            .setTitle('BO7-Scoreboard Overview')
+            .setDescription('All users and their wins across all ranks:');
+            
+        // Create a field for each user
+        const userEmbeds = [];
+        
+        for (const userId of userIds) {
+            try {
+                const user = await client.users.fetch(userId);
+                let fieldValue = '';
+                let totalWins = 0;
+                
+                // Format each rank
+                RANKS.forEach(rank => {
+                    const wins = data.scores[userId][rank] || 0;
+                    if (wins > 0) {
+                        fieldValue += `**${rank}**: ${wins} wins\n`;
+                        totalWins += wins;
+                    }
+                });
+                
+                // Add total wins at the end
+                fieldValue += `\n**Total**: ${totalWins} wins`;
+                
+                // Add to embed if there are any wins
+                if (totalWins > 0) {
+                    userEmbeds.push({
+                        name: user.username,
+                        value: fieldValue,
+                        inline: true,
+                        totalWins: totalWins // Used for sorting
+                    });
+                }
+            } catch (error) {
+                console.error(`Error fetching user ${userId}:`, error);
+            }
+        }
+        
+        // Sort users by total wins (highest first)
+        userEmbeds.sort((a, b) => b.totalWins - a.totalWins);
+        
+        // Add fields to the embed (removing the totalWins property)
+        userEmbeds.forEach(userEmbed => {
+            const { totalWins, ...fieldData } = userEmbed;
+            embed.addFields(fieldData);
+        });
+        
         message.reply({ embeds: [embed] });
         return;
     }
