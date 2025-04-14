@@ -160,39 +160,39 @@ const commands = [
                 
     // New Match Result Command
     new SlashCommandBuilder()
-        .setName('scoreboard-matchresult')
-        .setDescription('Reports a Bo7 match result between two players')
-        .addUserOption(option => 
-            option.setName('player1')
-                .setDescription('First player in the match')
-                .setRequired(true))
-        .addUserOption(option => 
-            option.setName('player2')
-                .setDescription('Second player in the match')
-                .setRequired(true))
-        .addStringOption(option => 
-            option.setName('rank')
-                .setDescription('The rank the match was played at')
-                .setRequired(true)
-                .addChoices(
-                    ...RANKS.map(rank => ({ name: rank, value: rank }))
-                ))
-        .addUserOption(option => 
-            option.setName('winner')
-                .setDescription('The player who won the match')
-                .setRequired(true))
-        .addIntegerOption(option => 
-            option.setName('winner_score')
-                .setDescription('Number of games won by the winner (default: 4 in a Bo7)')
-                .setRequired(false)
-                .setMinValue(1)
-                .setMaxValue(7))
-        .addIntegerOption(option => 
-            option.setName('loser_score')
-                .setDescription('Number of games won by the loser')
-                .setRequired(true)
-                .setMinValue(0)
-                .setMaxValue(6)),
+    .setName('scoreboard-matchresult')
+    .setDescription('Reports a Bo7 match result between two players')
+    .addUserOption(option => 
+        option.setName('player1')
+            .setDescription('First player in the match')
+            .setRequired(true))
+    .addUserOption(option => 
+        option.setName('player2')
+            .setDescription('Second player in the match')
+            .setRequired(true))
+    .addStringOption(option => 
+        option.setName('rank')
+            .setDescription('The rank the match was played at')
+            .setRequired(true)
+            .addChoices(
+                ...RANKS.map(rank => ({ name: rank, value: rank }))
+            ))
+    .addUserOption(option => 
+        option.setName('winner')
+            .setDescription('The player who won the match')
+            .setRequired(true))
+    .addIntegerOption(option => 
+        option.setName('winner_score')
+            .setDescription('Number of games won by the winner (default: 4 in a Bo7)')
+            .setRequired(true)
+            .setMinValue(1)
+            .setMaxValue(7))
+    .addIntegerOption(option => 
+        option.setName('loser_score')
+            .setDescription('Number of games won by the loser')
+            .setRequired(true)
+            .setMinValue(0)
+            .setMaxValue(6)),
     
     // Match History Command
     new SlashCommandBuilder()
