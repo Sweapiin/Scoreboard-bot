@@ -173,14 +173,14 @@ function createRankEmbed(title, description = null) {
 // Function to get rank emoji
 function getRankEmoji(rank) {
     const emojiMap = {
-        'Bronze': '🥉',
-        'Silver': '⚪',
-        'Gold': '🥇',
-        'Platinum': '💠',
-        'Diamond': '💎',
-        'Champion': '👑',
-        'Grand Champion': '🏆',
-        'Super Sonic Legend': '⭐'
+        'Bronze': '<:bronze:1361354230920909101>',
+        'Silver': '<:silver:1361353806125994135>',
+        'Gold': '<:gold:1361352717515227288>',
+        'Platinum': '<:platinum:1361353305254531096>',
+        'Diamond': '<:diamond:1361353672180764786>',
+        'Champion': '<:champ:1361352751669313566>',
+        'Grand Champion': '<:grandchamp:1361354065295966378>',
+        'Super Sonic Legend': '<:ssl:1361353029240094923>'
     };
     
     return emojiMap[rank] || '🎮';
