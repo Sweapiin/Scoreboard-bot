@@ -267,14 +267,14 @@ function getRankEmoji(rank) {
     // Replace these IDs with the actual emoji IDs from your server
     // To get an emoji ID, type \:your_emoji: in Discord chat
     const emojiMap = {
-        'Bronze': '<:bronze:1234567890>',
-        'Silver': '<:silver:1234567890>',
-        'Gold': '<:gold:1234567890>',
-        'Platinum': '<:platinum:1234567890>',
-        'Diamond': '<:diamond:1234567890>',
-        'Champion': '<:champion:1234567890>',
-        'Grand Champion': '<:grandchampion:1234567890>',
-        'Super Sonic Legend': '<:ssl:1234567890>'
+        'Bronze': '<:bronze:1361354230920909101>',
+        'Silver': '<:silver:1361353806125994135>',
+        'Gold': '<:gold:1361352717515227288>',
+        'Platinum': '<:platinum:1361353305254531096>',
+        'Diamond': '<:diamond:1361353672180764786>',
+        'Champion': '<:champ:1361352751669313566>',
+        'Grand Champion': '<:grandchamp:1361354065295966378>',
+        'Super Sonic Legend': '<:ssl:1361353029240094923>'
     };
     
     return emojiMap[rank] || '🎮';
