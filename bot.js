@@ -233,7 +233,8 @@ function createRankEmbed(title, description = null) {
 // Function to create a match result embed
 function createMatchResultEmbed(match) {
     const embed = createRankEmbed('Bo7 Match Result', '');
-        embed.setDescription(`Match played in ${getRankEmoji(match.rank)} **${match.rank}**`);
+    embed.setDescription(`Match played in ${getRankEmoji(match.rank)} **${match.rank}**`);
+    
     // Format the result prominently
     embed.addFields(
         { 
@@ -280,6 +281,68 @@ function getRankEmoji(rank) {
     return emojiMap[rank] || '🎮';
 }
 
+// Active self-pinging to avoid idle timeouts
+async function pingOwnServer() {
+    try {
+        // Get your app URL from environment variable or use a default one
+        // Change this to your actual app URL on Render
+        const appUrl = process.env.APP_URL || "https://scoreboard-bot-hzxi.onrender.com";
+        
+        console.log(`[${new Date().toISOString()}] Attempting to ping self at ${appUrl}/ping`);
+        
+        // Using native https/http module for compatibility
+        const httpModule = appUrl.startsWith('https') ? require('https') : require('http');
+        
+        // Create a promise-based request
+        const makeRequest = () => {
+            return new Promise((resolve, reject) => {
+                const req = httpModule.get(`${appUrl}/ping`, (res) => {
+                    let data = '';
+                    res.on('data', (chunk) => { data += chunk; });
+                    res.on('end', () => {
+                        resolve({ 
+                            statusCode: res.statusCode,
+                            data: data
+                        });
+                    });
+                });
+                
+                req.on('error', (err) => {
+                    reject(err);
+                });
+                
+                req.end();
+            });
+        };
+        
+        const response = await makeRequest();
+        
+        if (response.statusCode === 200) {
+            console.log(`[${new Date().toISOString()}] Successfully pinged own server to keep alive`);
+        } else {
+            console.log(`[${new Date().toISOString()}] Ping returned status: ${response.statusCode}`);
+        }
+    } catch (error) {
+        console.error(`[${new Date().toISOString()}] Error pinging self: ${error.message}`);
+    }
+}
+
+// Add error handling utility function
+async function safeReply(interaction, content, options = {}) {
+    try {
+        if (interaction.deferred || interaction.replied) {
+            return await interaction.editReply(content);
+        } else {
+            return await interaction.reply({...content, ...options});
+        }
+    } catch (error) {
+        console.error(`Error replying to interaction: ${error.message}`);
+        if (error.code === 10062) { // Unknown Interaction error
+            console.log('Interaction expired before response was sent');
+        }
+    }
+}
+
 // Bot ready event
 client.once('ready', () => {
     console.log(`Bot is online! Logged in as ${client.user.tag}`);
@@ -302,56 +365,57 @@ client.once('ready', () => {
         }
     })();
     
-    // Set up a more effective keep-alive mechanism
-    // Ping Discord API every minute to keep connection alive
-// More robust keep-alive mechanism
-setInterval(() => {
-    console.log(`[${new Date().toISOString()}] Running keep-alive checks...`);
-    
-    // 1. Check connection status
-    const status = client.ws.status;
-    if (status !== 0) {
-        console.log(`WebSocket connection is not READY (status: ${status}), attempting to reconnect...`);
-        client.destroy().then(() => client.login(process.env.DISCORD_TOKEN));
-    } else {
-        console.log(`WebSocket connection is healthy (status: ${status})`);
-    }
-    
-    // 2. Ping all guilds (more thorough than just the first one)
-    client.guilds.fetch()
-        .then(guilds => {
-            console.log(`Successfully fetched ${guilds.size} guilds`);
-            // Fetch a random member from a random guild to keep connection fresh
-            if (guilds.size > 0) {
-                const randomGuild = guilds.random();
-                if (randomGuild) {
-                    return randomGuild.fetch();
-                }
-            }
-            return null;
-        })
-        .then(guild => {
-            if (guild) {
-                console.log(`Successfully fetched guild: ${guild.name}`);
-                // The fetch itself is enough to keep the connection alive
-            }
-        })
-        .catch(err => console.error("Error in keep-alive process:", err));
+    // More robust keep-alive mechanism
+    setInterval(() => {
+        console.log(`[${new Date().toISOString()}] Running keep-alive checks...`);
         
-}, 30 * 1000); // Every 30 seconds (increased frequency)
-
-// Add a reconnection mechanism that actively checks
-setInterval(() => {
-    // If websocket is down but client thinks it's connected, force a reconnect
-    if (!client.ws.connection || client.ws.connection.readyState !== 1) {
-        console.log('WebSocket appears disconnected but client has not reconnected. Forcing reconnection...');
-        try {
+        // 1. Check connection status
+        const status = client.ws.status;
+        if (status !== 0) {
+            console.log(`WebSocket connection is not READY (status: ${status}), attempting to reconnect...`);
             client.destroy().then(() => client.login(process.env.DISCORD_TOKEN));
-        } catch (err) {
-            console.error('Error during forced reconnection:', err);
+        } else {
+            console.log(`WebSocket connection is healthy (status: ${status})`);
         }
-    }
-}, 5 * 60 * 1000); // Check every 5 minutes
+        
+        // 2. Ping all guilds (more thorough than just the first one)
+        client.guilds.fetch()
+            .then(guilds => {
+                console.log(`Successfully fetched ${guilds.size} guilds`);
+                // Fetch the first guild instead of using random() which might not exist
+                if (guilds.size > 0) {
+                    const firstGuildId = guilds.first()?.id;
+                    if (firstGuildId) {
+                        return client.guilds.fetch(firstGuildId);
+                    }
+                }
+                return null;
+            })
+            .then(guild => {
+                if (guild) {
+                    console.log(`Successfully fetched guild: ${guild.name}`);
+                    // The fetch itself is enough to keep the connection alive
+                }
+            })
+            .catch(err => console.error("Error in keep-alive process:", err));
+            
+    }, 30 * 1000); // Every 30 seconds (increased frequency)
+
+    // Add a reconnection mechanism that actively checks
+    setInterval(() => {
+        // If websocket is down but client thinks it's connected, force a reconnect
+        if (!client.ws.connection || client.ws.connection.readyState !== 1) {
+            console.log('WebSocket appears disconnected but client has not reconnected. Forcing reconnection...');
+            try {
+                client.destroy().then(() => client.login(process.env.DISCORD_TOKEN));
+            } catch (err) {
+                console.error('Error during forced reconnection:', err);
+            }
+        }
+    }, 5 * 60 * 1000); // Check every 5 minutes
+    
+    // Set up self-pinging every 2 minutes
+    setInterval(pingOwnServer, 2 * 60 * 1000);
 });
 
 // Add reconnection handlers
@@ -370,22 +434,6 @@ client.on('resumed', (replayed) => {
 client.on('error', (error) => {
     console.error('Discord client error:', error);
 });
-
-// Add error handling utility function
-async function safeReply(interaction, content, options = {}) {
-    try {
-        if (interaction.deferred || interaction.replied) {
-            return await interaction.editReply(content);
-        } else {
-            return await interaction.reply({...content, ...options});
-        }
-    } catch (error) {
-        console.error(`Error replying to interaction: ${error.message}`);
-        if (error.code === 10062) { // Unknown Interaction error
-            console.log('Interaction expired before response was sent');
-        }
-    }
-}
 
 // Interaction handler
 client.on('interactionCreate', async interaction => {
@@ -746,113 +794,111 @@ client.on('interactionCreate', async interaction => {
                 const formattedDate = `${matchDate.toLocaleDateString()} ${matchDate.toLocaleTimeString()}`;
                 
                 description += `**Match ${index + 1}** - ${formattedDate}\n`;
-                description += `${getRankEmoji(match.rank)} **${match.rank}**\n`;
-                description += `${match.player1.username} vs ${match.player2.username}\n`;
+                description += `${getRankEmoji(match.rank)} **${match.rank}**\n`;description += `${match.player1.username} vs ${match.player2.username}\n`;
                 description += `Winner: **${match.winner.username}** (${match.winnerScore}-${match.loserScore})\n\n`;
             });
             
             embed.setDescription(description);
+            
+            if (filteredMatches.length > limit) {
+                embed.setFooter({ 
+                    text: `Showing ${limit} of ${filteredMatches.length} matches. Use /scoreboard-matchhistory with a higher limit to see more.`,
+                    iconURL: 'https://i.imgur.com/6cY7QT7.png' 
+                });
+            }
+            
+            await safeReply(interaction, { embeds: [embed] });
+            return;
+        }
+        
+        // Admin commands from here
+        if (['scoreboard-addwin', 'scoreboard-removewin', 'scoreboard-setwins'].includes(commandName)) {
+            // Defer reply as we need to check permissions and save data
+            await interaction.deferReply({ ephemeral: true });
+            
+            // Check if user has admin role
+            if (!(await isAdmin(interaction.member))) {
+                await safeReply(interaction, { 
+                    content: 'You do not have permission to use this command.',
+                    ephemeral: true 
+                });
+                return;
+            }
+            
+            // Remove ephemeral since it's authorized - we'll now show the result publicly
+            await interaction.editReply({ content: 'Processing your request...' });
+            
+            const mentionedUser = interaction.options.getUser('user');
+            const userId = mentionedUser.id;
+            const rank = interaction.options.getString('rank');
+            
+            // Initialize user if not exists
+            if (!data.scores[userId]) {
+                data.scores[userId] = {};
+                RANKS.forEach(r => data.scores[userId][r] = 0);
+            }
+            
+            if (commandName === 'scoreboard-addwin') {
+                // Add a win
+                data.scores[userId][rank] = (data.scores[userId][rank] || 0) + 1;
+                saveData(data);
                 
-                if (filteredMatches.length > limit) {
-                    embed.setFooter({ 
-                        text: `Showing ${limit} of ${filteredMatches.length} matches. Use /scoreboard-matchhistory with a higher limit to see more.`,
-                        iconURL: 'https://i.imgur.com/6cY7QT7.png' 
-                    });
-                }
+                const embed = createRankEmbed('Win Added', `Added a win for ${mentionedUser.username} in ${getRankEmoji(rank)} **${rank}**.\n\nThey now have **${data.scores[userId][rank]} wins** in this rank.`);
                 
                 await safeReply(interaction, { embeds: [embed] });
-                return;
-            }
-            
-            // Admin commands from here
-            if (['scoreboard-addwin', 'scoreboard-removewin', 'scoreboard-setwins'].includes(commandName)) {
-                // Defer reply as we need to check permissions and save data
-                await interaction.deferReply({ ephemeral: true });
-                
-                // Check if user has admin role
-                if (!(await isAdmin(interaction.member))) {
+            } else if (commandName === 'scoreboard-removewin') {
+                // Remove a win
+                if (data.scores[userId][rank] > 0) {
+                    data.scores[userId][rank]--;
+                    saveData(data);
+                    
+                    const embed = createRankEmbed('Win Removed', `Removed a win from ${mentionedUser.username} in ${getRankEmoji(rank)} **${rank}**.\n\nThey now have **${data.scores[userId][rank]} wins** in this rank.`);
+                    
+                    await safeReply(interaction, { embeds: [embed] });
+                } else {
                     await safeReply(interaction, { 
-                        content: 'You do not have permission to use this command.',
+                        content: `${mentionedUser.username} has no wins to remove in ${rank}.`,
                         ephemeral: true 
                     });
-                    return;
                 }
+            } else if (commandName === 'scoreboard-setwins') {
+                // Set wins to a specific value
+                const wins = interaction.options.getInteger('wins');
                 
-                // Remove ephemeral since it's authorized - we'll now show the result publicly
-                await interaction.editReply({ content: 'Processing your request...' });
+                data.scores[userId][rank] = wins;
+                saveData(data);
                 
-                const mentionedUser = interaction.options.getUser('user');
-                const userId = mentionedUser.id;
-                const rank = interaction.options.getString('rank');
+                const embed = createRankEmbed('Wins Updated', `Set ${mentionedUser.username}'s wins in ${getRankEmoji(rank)} **${rank}** to **${wins}**.`);
                 
-                // Initialize user if not exists
-                if (!data.scores[userId]) {
-                    data.scores[userId] = {};
-                    RANKS.forEach(r => data.scores[userId][r] = 0);
-                }
-                
-                if (commandName === 'scoreboard-addwin') {
-                    // Add a win
-                    data.scores[userId][rank] = (data.scores[userId][rank] || 0) + 1;
-                    saveData(data);
-                    
-                    const embed = createRankEmbed('Win Added', `Added a win for ${mentionedUser.username} in ${getRankEmoji(rank)} **${rank}**.\n\nThey now have **${data.scores[userId][rank]} wins** in this rank.`);
-                    
-                    await safeReply(interaction, { embeds: [embed] });
-                } else if (commandName === 'scoreboard-removewin') {
-                    // Remove a win
-                    if (data.scores[userId][rank] > 0) {
-                        data.scores[userId][rank]--;
-                        saveData(data);
-                        
-                        const embed = createRankEmbed('Win Removed', `Removed a win from ${mentionedUser.username} in ${getRankEmoji(rank)} **${rank}**.\n\nThey now have **${data.scores[userId][rank]} wins** in this rank.`);
-                        
-                        await safeReply(interaction, { embeds: [embed] });
-                    } else {
-                        await safeReply(interaction, { 
-                            content: `${mentionedUser.username} has no wins to remove in ${rank}.`,
-                            ephemeral: true 
-                        });
-                    }
-                } else if (commandName === 'scoreboard-setwins') {
-                    // Set wins to a specific value
-                    const wins = interaction.options.getInteger('wins');
-                    
-                    data.scores[userId][rank] = wins;
-                    saveData(data);
-                    
-                    const embed = createRankEmbed('Wins Updated', `Set ${mentionedUser.username}'s wins in ${getRankEmoji(rank)} **${rank}** to **${wins}**.`);
-                    
-                    await safeReply(interaction, { embeds: [embed] });
-                }
-                
-                return;
+                await safeReply(interaction, { embeds: [embed] });
             }
-        } catch (error) {
-            // Global error handler for all command processing
-            console.error(`Error processing command ${interaction.commandName}:`, error);
             
-            try {
-                // Try to inform the user that something went wrong
-                const errorMessage = error.code === 10062 
-                    ? "The response took too long to process. Please try again."
-                    : "An error occurred while processing your command. Please try again.";
-                    
-                if (!interaction.replied && !interaction.deferred) {
-                    await interaction.reply({ 
-                        content: errorMessage,
-                        ephemeral: true 
-                    });
-                } else if (interaction.deferred) {
-                    await interaction.editReply({ content: errorMessage });
-                }
-            } catch (replyError) {
-                console.error('Failed to send error message:', replyError);
-            }
+            return;
         }
-    });
-    
-    // Create a more robust HTTP server for Render.com
+    } catch (error) {
+        // Global error handler for all command processing
+        console.error(`Error processing command ${interaction.commandName}:`, error);
+        
+        try {
+            // Try to inform the user that something went wrong
+            const errorMessage = error.code === 10062 
+                ? "The response took too long to process. Please try again."
+                : "An error occurred while processing your command. Please try again.";
+                
+            if (!interaction.replied && !interaction.deferred) {
+                await interaction.reply({ 
+                    content: errorMessage,
+                    ephemeral: true 
+                });
+            } else if (interaction.deferred) {
+                await interaction.editReply({ content: errorMessage });
+            }
+        } catch (replyError) {
+            console.error('Failed to send error message:', replyError);
+        }
+    }
+});
+
 // Create a more robust HTTP server for Render.com
 const server = http.createServer((req, res) => {
     // Log all incoming requests
@@ -897,15 +943,15 @@ server.listen(PORT, () => {
     console.log(`Health endpoint: http://localhost:${PORT}/health`);
     console.log(`Ping endpoint: http://localhost:${PORT}/ping`);
 });
-    
-    // Login to Discord
-    if (!process.env.DISCORD_TOKEN) {
-        console.error('DISCORD_TOKEN environment variable is not set!');
-        console.error('Please set your discord token as an environment variable or in a .env file');
-        process.exit(1);
-    }
-    
-    client.login(process.env.DISCORD_TOKEN);
-    
-    // Log a message about admin role configuration
-    console.log(`Bot is configured to recognize users with the "${config.adminRoleName}" role as admins`);
+
+// Login to Discord
+if (!process.env.DISCORD_TOKEN) {
+    console.error('DISCORD_TOKEN environment variable is not set!');
+    console.error('Please set your discord token as an environment variable or in a .env file');
+    process.exit(1);
+}
+
+client.login(process.env.DISCORD_TOKEN);
+
+// Log a message about admin role configuration
+console.log(`Bot is configured to recognize users with the "${config.adminRoleName}" role as admins`);
