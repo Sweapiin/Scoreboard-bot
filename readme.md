@@ -45,11 +45,18 @@ A Discord bot for tracking Best of 7 (BO7) scores with Rocket League ranking sys
 1. Clone or download this repository
 2. Install dependencies:
    ```
-   npm install discord.js
+   npm install
    ```
-3. Open `bot.js` and update:
-   - `YOUR_DISCORD_BOT_TOKEN` with your bot token
-   - (Optional) Change `adminRoleName` if your admin role is called something other than "Admin"
+3. Set up your environment variables:
+   - Copy `.env.example` to a new file called `.env`
+   - Open `.env` and add your Discord bot token:
+     ```
+     DISCORD_TOKEN=your_discord_token_here
+     ```
+   - Optionally change the admin role name if needed:
+     ```
+     ADMIN_ROLE_NAME=CustomAdminRoleName
+     ```
 
 ### Step 4: Run the Bot
 
@@ -63,15 +70,16 @@ A Discord bot for tracking Best of 7 (BO7) scores with Rocket League ranking sys
 
 ### User Commands
 
-- `!help` - Shows the help message with available commands
-- `!stats [user]` - Shows stats for a user (or yourself if no user is specified)
-- `!leaderboard [rank]` - Shows leaderboard for all ranks or a specific rank
+- `/scoreboardhelp` - Shows the help message with available commands
+- `/scoreboardstats [user]` - Shows stats for a user (or yourself if no user is specified)
+- `/scoreboardleaderboard [rank]` - Shows leaderboard for all ranks or a specific rank
+- `/scoreboardoverview` - Shows a comprehensive overview of all users and their wins across all ranks
 
 ### Admin Commands
 
-- `!addwin <user> <rank>` - Adds a win for a user in the specified rank
-- `!removewin <user> <rank>` - Removes a win for a user in the specified rank
-- `!setwins <user> <rank> <wins>` - Sets the wins for a user in the specified rank to a specific value
+- `/scoreboardaddwin <user> <rank>` - Adds a win for a user in the specified rank
+- `/scoreboardremovewin <user> <rank>` - Removes a win for a user in the specified rank
+- `/scoreboardsetwins <user> <rank> <wins>` - Sets the wins for a user in the specified rank to a specific value
 
 ## Ranks
 
@@ -87,14 +95,15 @@ The bot supports these ranks (case insensitive in commands):
 
 ## Examples
 
-- `!addwin @User Bronze` - Adds a win for the mentioned user in Bronze rank
-- `!stats @User` - Shows all stats for the mentioned user
-- `!leaderboard Diamond` - Shows the leaderboard for Diamond rank
+- `/scoreboardaddwin @User Bronze` - Adds a win for the mentioned user in Bronze rank
+- `/scoreboardstats @User` - Shows all stats for the mentioned user
+- `/scoreboardleaderboard Diamond` - Shows the leaderboard for Diamond rank
+- `/scoreboardoverview` - Shows a comprehensive overview of all users and their ranks
 
 ## Troubleshooting
 
 - If the bot doesn't respond, check if it's online and has proper permissions
-- If commands don't work, make sure you're using the correct prefix (default is `!`)
+- If commands don't work, make sure you're using the correct prefix (default is `/scoreboard`)
 - For admin commands, make sure you have a role named exactly "Admin" (or update the `adminRoleName` in the config)
 
 ## Data Storage
@@ -113,12 +122,33 @@ To deploy this bot on Render.com and prevent it from sleeping:
    - **Start Command**: `npm start`
 4. Add the following environment variables:
    - `DISCORD_TOKEN`: Your Discord bot token
+   - `ADMIN_ROLE_NAME` (optional): Name of your admin role if not "Admin"
    - `PORT`: Will be set automatically by Render
-5. For the admin role name, you can either:
-   - Use the default "Admin" role name already configured in the code
-   - Change the `adminRoleName` in the `bot.js` file
-   - Set an environment variable `ADMIN_ROLE_NAME` on Render.com
 
 The bot includes:
 - A 2-minute self-ping mechanism to prevent the bot from sleeping
 - An HTTP server that listens on the PORT environment variable as required by Render
+
+### Important Notes for Render.com Deployment
+
+- The free tier of Render spins down web services after periods of inactivity, despite the self-ping
+- For more reliable uptime, consider upgrading to a paid plan
+- The `scores.json` file will be stored in the container's filesystem, which is ephemeral on Render's free tier. For persistent storage, consider implementing a database solution.
+
+## Security Notes
+
+### Protecting Your Bot Token
+
+- **NEVER commit your bot token to GitHub or any public repository**
+- Always use environment variables or a `.env` file that's listed in `.gitignore`
+- If you accidentally expose your token, reset it immediately in the Discord Developer Portal
+- When sharing code snippets, make sure your token is not included
+
+GitHub automatically scans repositories for leaked tokens and will notify you if it finds any. Discord also monitors for leaked tokens and will invalidate them automatically.
+
+### Setting Up Local Development
+
+1. Use the provided `.env.example` file as a template
+2. Create a new file called `.env` with your actual token
+3. This file will be ignored by git (thanks to `.gitignore`)
+4. Make sure to set up environment variables on your hosting platform
