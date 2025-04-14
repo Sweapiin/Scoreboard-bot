@@ -304,15 +304,54 @@ client.once('ready', () => {
     
     // Set up a more effective keep-alive mechanism
     // Ping Discord API every minute to keep connection alive
-    setInterval(() => {
-        console.log(`[${new Date().toISOString()}] Keeping bot connection alive with API ping`);
+// More robust keep-alive mechanism
+setInterval(() => {
+    console.log(`[${new Date().toISOString()}] Running keep-alive checks...`);
+    
+    // 1. Check connection status
+    const status = client.ws.status;
+    if (status !== 0) {
+        console.log(`WebSocket connection is not READY (status: ${status}), attempting to reconnect...`);
+        client.destroy().then(() => client.login(process.env.DISCORD_TOKEN));
+    } else {
+        console.log(`WebSocket connection is healthy (status: ${status})`);
+    }
+    
+    // 2. Ping all guilds (more thorough than just the first one)
+    client.guilds.fetch()
+        .then(guilds => {
+            console.log(`Successfully fetched ${guilds.size} guilds`);
+            // Fetch a random member from a random guild to keep connection fresh
+            if (guilds.size > 0) {
+                const randomGuild = guilds.random();
+                if (randomGuild) {
+                    return randomGuild.fetch();
+                }
+            }
+            return null;
+        })
+        .then(guild => {
+            if (guild) {
+                console.log(`Successfully fetched guild: ${guild.name}`);
+                // The fetch itself is enough to keep the connection alive
+            }
+        })
+        .catch(err => console.error("Error in keep-alive process:", err));
         
-        // Perform a lightweight API request to keep the connection fresh
-        client.guilds.fetch(client.guilds.cache.first()?.id || '0')
-            .then(() => console.log("Successfully pinged Discord API"))
-            .catch(err => console.error("Error pinging Discord API:", err));
-            
-    }, 60 * 1000); // Every minute
+}, 30 * 1000); // Every 30 seconds (increased frequency)
+
+// Add a reconnection mechanism that actively checks
+setInterval(() => {
+    // If websocket is down but client thinks it's connected, force a reconnect
+    if (!client.ws.connection || client.ws.connection.readyState !== 1) {
+        console.log('WebSocket appears disconnected but client has not reconnected. Forcing reconnection...');
+        try {
+            client.destroy().then(() => client.login(process.env.DISCORD_TOKEN));
+        } catch (err) {
+            console.error('Error during forced reconnection:', err);
+        }
+    }
+}, 5 * 60 * 1000); // Check every 5 minutes
 });
 
 // Add reconnection handlers
@@ -814,32 +853,50 @@ client.on('interactionCreate', async interaction => {
     });
     
     // Create a more robust HTTP server for Render.com
-    const server = http.createServer((req, res) => {
-        if (req.url === '/health') {
-            // Health check endpoint
-            const healthStatus = {
-                status: 'up',
-                timestamp: new Date().toISOString(),
-                discordConnection: client.ws.status === 0 ? 'connected' : 'disconnected',
-                uptime: process.uptime(),
-                readyAt: client.readyAt ? client.readyAt.toISOString() : null,
-                ping: client.ws.ping
-            };
-            
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(healthStatus, null, 2));
-        } else {
-            // Standard response
-            res.writeHead(200, { 'Content-Type': 'text/plain' });
-            res.end('BO7-Scoreboard Bot is running!\n');
-        }
-    });
+// Create a more robust HTTP server for Render.com
+const server = http.createServer((req, res) => {
+    // Log all incoming requests
+    console.log(`[${new Date().toISOString()}] HTTP request: ${req.method} ${req.url}`);
     
-    // Use the PORT environment variable provided by Render.com or default to 3000
-    const PORT = process.env.PORT || 3000;
-    server.listen(PORT, () => {
-        console.log(`HTTP server running on port ${PORT}`);
-    });
+    if (req.url === '/health') {
+        // Health check endpoint
+        const healthStatus = {
+            status: 'up',
+            timestamp: new Date().toISOString(),
+            discordConnection: client.ws.status === 0 ? 'connected' : 'disconnected',
+            uptime: process.uptime(),
+            readyAt: client.readyAt ? client.readyAt.toISOString() : null,
+            ping: client.ws.ping,
+            memory: process.memoryUsage(),
+            guilds: client.guilds.cache.size,
+            connectionState: client.ws.connection ? client.ws.connection.readyState : 'no connection'
+        };
+        
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(healthStatus, null, 2));
+    } else if (req.url === '/ping') {
+        // Simple ping endpoint that external services can hit
+        console.log(`Received ping at ${new Date().toISOString()}`);
+        
+        // Perform a lightweight ping to Discord API to ensure connection
+        client.guilds.fetch().catch(err => console.error("Error fetching guilds on ping:", err));
+        
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('pong\n');
+    } else {
+        // Standard response
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('BO7-Scoreboard Bot is running!\n');
+    }
+});
+
+// Use the PORT environment variable provided by Render.com or default to 3000
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`HTTP server running on port ${PORT}`);
+    console.log(`Health endpoint: http://localhost:${PORT}/health`);
+    console.log(`Ping endpoint: http://localhost:${PORT}/ping`);
+});
     
     // Login to Discord
     if (!process.env.DISCORD_TOKEN) {
