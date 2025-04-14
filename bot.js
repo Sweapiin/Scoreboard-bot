@@ -1,5 +1,5 @@
-// Discord BO7-Scoreboard Bot with Rocket League ranks
-const { Client, GatewayIntentBits, Partials, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+// Discord BO7-Scoreboard Bot with Rocket League ranks using slash commands
+const { Client, GatewayIntentBits, Partials, EmbedBuilder, PermissionFlagsBits, REST, Routes, SlashCommandBuilder } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
@@ -13,7 +13,6 @@ try {
 
 // Bot configuration
 const config = {
-    prefix: '/scoreboard', // More unique command prefix
     adminRoleName: process.env.ADMIN_ROLE_NAME || 'Admin', // Admin role name, can be set via environment variable
 };
 
@@ -21,10 +20,8 @@ const config = {
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent
-    ],
-    partials: [Partials.Channel]
+        GatewayIntentBits.GuildMembers
+    ]
 });
 
 // Define the ranks
@@ -67,13 +64,149 @@ function saveData(data) {
 }
 
 // Check if user has admin role
-function isAdmin(member) {
+async function isAdmin(member) {
+    if (!member) return false;
+    await member.fetch();
     return member.roles.cache.some(role => role.name === config.adminRoleName);
+}
+
+// Define slash commands
+const commands = [
+    new SlashCommandBuilder()
+        .setName('scoreboard-help')
+        .setDescription('Shows help information for the BO7-Scoreboard Bot'),
+    
+    new SlashCommandBuilder()
+        .setName('scoreboard-stats')
+        .setDescription('Shows stats for a user')
+        .addUserOption(option => 
+            option.setName('user')
+                .setDescription('The user to check stats for (defaults to yourself)')
+                .setRequired(false)),
+    
+    new SlashCommandBuilder()
+        .setName('scoreboard-leaderboard')
+        .setDescription('Shows leaderboard for all ranks or a specific rank')
+        .addStringOption(option => 
+            option.setName('rank')
+                .setDescription('Specific rank to check (optional)')
+                .setRequired(false)
+                .addChoices(
+                    ...RANKS.map(rank => ({ name: rank, value: rank }))
+                )),
+    
+    new SlashCommandBuilder()
+        .setName('scoreboard-overview')
+        .setDescription('Shows an overview of all users and their wins across all ranks'),
+    
+    new SlashCommandBuilder()
+        .setName('scoreboard-addwin')
+        .setDescription('Adds a win for a user in a specific rank')
+        .addUserOption(option => 
+            option.setName('user')
+                .setDescription('The user to add a win for')
+                .setRequired(true))
+        .addStringOption(option => 
+            option.setName('rank')
+                .setDescription('The rank to add a win for')
+                .setRequired(true)
+                .addChoices(
+                    ...RANKS.map(rank => ({ name: rank, value: rank }))
+                )),
+    
+    new SlashCommandBuilder()
+        .setName('scoreboard-removewin')
+        .setDescription('Removes a win from a user in a specific rank')
+        .addUserOption(option => 
+            option.setName('user')
+                .setDescription('The user to remove a win from')
+                .setRequired(true))
+        .addStringOption(option => 
+            option.setName('rank')
+                .setDescription('The rank to remove a win from')
+                .setRequired(true)
+                .addChoices(
+                    ...RANKS.map(rank => ({ name: rank, value: rank }))
+                )),
+    
+    new SlashCommandBuilder()
+        .setName('scoreboard-setwins')
+        .setDescription('Sets the wins for a user in a specific rank')
+        .addUserOption(option => 
+            option.setName('user')
+                .setDescription('The user to set wins for')
+                .setRequired(true))
+        .addStringOption(option => 
+            option.setName('rank')
+                .setDescription('The rank to set wins for')
+                .setRequired(true)
+                .addChoices(
+                    ...RANKS.map(rank => ({ name: rank, value: rank }))
+                ))
+        .addIntegerOption(option => 
+            option.setName('wins')
+                .setDescription('The number of wins to set')
+                .setRequired(true)
+                .setMinValue(0)),
+];
+
+// Helper to create fancy embed designs
+function createRankEmbed(title, description = null) {
+    const embed = new EmbedBuilder()
+        .setColor('#0099ff')
+        .setTitle(`🏆 ${title} 🏆`)
+        .setTimestamp();
+    
+    if (description) {
+        embed.setDescription(description);
+    }
+    
+    // Add rocket league theme
+    embed.setFooter({ 
+        text: 'BO7-Scoreboard Bot | Rocket League Ranks', 
+        iconURL: 'https://i.imgur.com/6cY7QT7.png' // Rocket League logo icon
+    });
+    
+    return embed;
+}
+
+// Function to get rank emoji
+function getRankEmoji(rank) {
+    const emojiMap = {
+        'Bronze': '🥉',
+        'Silver': '⚪',
+        'Gold': '🥇',
+        'Platinum': '💠',
+        'Diamond': '💎',
+        'Champion': '👑',
+        'Grand Champion': '🏆',
+        'Super Sonic Legend': '⭐'
+    };
+    
+    return emojiMap[rank] || '🎮';
 }
 
 // Bot ready event
 client.once('ready', () => {
     console.log(`Bot is online! Logged in as ${client.user.tag}`);
+    
+    // Register slash commands
+    const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+    
+    (async () => {
+        try {
+            console.log('Started refreshing application (/) commands.');
+            
+            await rest.put(
+                Routes.applicationCommands(client.user.id),
+                { body: commands.map(command => command.toJSON()) },
+            );
+            
+            console.log('Successfully reloaded application (/) commands.');
+        } catch (error) {
+            console.error('Failed to reload application (/) commands:', error);
+        }
+    })();
     
     // Set up a self-ping every 2 minutes to prevent the bot from sleeping on Render
     setInterval(() => {
@@ -82,48 +215,42 @@ client.once('ready', () => {
     }, 2 * 60 * 1000); // 2 minutes in milliseconds
 });
 
-// Message handler
-client.on('messageCreate', async (message) => {
-    // Ignore bot messages and messages that don't start with prefix
-    if (message.author.bot || !message.content.startsWith(config.prefix)) return;
-
-    // Parse command and arguments
-    const args = message.content.slice(config.prefix.length).trim().split(/ +/);
-    const command = args.shift().toLowerCase();
-
+// Interaction handler
+client.on('interactionCreate', async interaction => {
+    if (!interaction.isCommand()) return;
+    
     // Load current data
     const data = loadData();
-
+    
     // Initialize scores object if it doesn't exist
     if (!data.scores) {
         data.scores = {};
     }
-
+    
+    const commandName = interaction.commandName;
+    
     // Help command
-    if (command === 'help') {
-        const embed = new EmbedBuilder()
-            .setColor('#0099ff')
-            .setTitle('BO7-Scoreboard Bot Help')
-            .setDescription('List of available commands:')
-            .addFields(
-                { name: `${config.prefix}help`, value: 'Shows this help message' },
-                { name: `${config.prefix}stats [user]`, value: 'Shows stats for a user (or yourself if no user is specified)' },
-                { name: `${config.prefix}leaderboard [rank]`, value: 'Shows leaderboard for all ranks or a specific rank' },
-                { name: `${config.prefix}overview`, value: 'Shows a comprehensive overview of all users and their wins across all ranks' },
-                { name: '**Admin Commands**', value: 'The following commands require admin privileges:' },
-                { name: `${config.prefix}addwin <user> <rank>`, value: 'Adds a win for a user in the specified rank' },
-                { name: `${config.prefix}removewin <user> <rank>`, value: 'Removes a win for a user in the specified rank' },
-                { name: `${config.prefix}setwins <user> <rank> <wins>`, value: 'Sets the wins for a user in the specified rank to a specific value' }
-            )
-            .setFooter({ text: 'BO7-Scoreboard Bot' });
-
-        message.reply({ embeds: [embed] });
+    if (commandName === 'scoreboard-help') {
+        const embed = createRankEmbed('BO7-Scoreboard Bot Help', 'List of available commands:');
+        
+        embed.addFields(
+            { name: '/scoreboard-help', value: 'Shows this help message', inline: false },
+            { name: '/scoreboard-stats [user]', value: 'Shows stats for a user (or yourself if no user is specified)', inline: false },
+            { name: '/scoreboard-leaderboard [rank]', value: 'Shows leaderboard for all ranks or a specific rank', inline: false },
+            { name: '/scoreboard-overview', value: 'Shows a comprehensive overview of all users and their wins across all ranks', inline: false },
+            { name: '**Admin Commands**', value: 'The following commands require the Admin role:', inline: false },
+            { name: '/scoreboard-addwin <user> <rank>', value: 'Adds a win for a user in the specified rank', inline: false },
+            { name: '/scoreboard-removewin <user> <rank>', value: 'Removes a win for a user in the specified rank', inline: false },
+            { name: '/scoreboard-setwins <user> <rank> <wins>', value: 'Sets the wins for a user in the specified rank to a specific value', inline: false }
+        );
+        
+        await interaction.reply({ embeds: [embed], ephemeral: false });
         return;
     }
-
+    
     // Stats command
-    if (command === 'stats') {
-        let targetUser = message.mentions.users.first() || message.author;
+    if (commandName === 'scoreboard-stats') {
+        const targetUser = interaction.options.getUser('user') || interaction.user;
         const userId = targetUser.id;
         
         // Initialize user if not exists
@@ -132,33 +259,31 @@ client.on('messageCreate', async (message) => {
             RANKS.forEach(rank => data.scores[userId][rank] = 0);
         }
         
-        const embed = new EmbedBuilder()
-            .setColor('#0099ff')
-            .setTitle(`Stats for ${targetUser.username}`)
-            .setThumbnail(targetUser.displayAvatarURL());
+        const embed = createRankEmbed(`Stats for ${targetUser.username}`);
+        embed.setThumbnail(targetUser.displayAvatarURL());
+        
+        let description = '';
+        let totalWins = 0;
         
         RANKS.forEach(rank => {
             const wins = data.scores[userId][rank] || 0;
-            embed.addFields({ name: rank, value: `${wins} wins`, inline: true });
+            totalWins += wins;
+            description += `${getRankEmoji(rank)} **${rank}**: ${wins} wins\n`;
         });
         
-        message.reply({ embeds: [embed] });
+        description += `\n🔥 **Total Wins**: ${totalWins}`;
+        embed.setDescription(description);
+        
+        await interaction.reply({ embeds: [embed] });
         return;
     }
-
+    
     // Leaderboard command
-    if (command === 'leaderboard') {
-        const rank = args[0] ? args[0].charAt(0).toUpperCase() + args[0].slice(1).toLowerCase() : null;
+    if (commandName === 'scoreboard-leaderboard') {
+        const rank = interaction.options.getString('rank');
         
-        if (rank && !RANKS.includes(rank)) {
-            message.reply(`Invalid rank. Available ranks: ${RANKS.join(', ')}`);
-            return;
-        }
-
-        const embed = new EmbedBuilder()
-            .setColor('#0099ff')
-            .setTitle(rank ? `Leaderboard for ${rank}` : 'Overall Leaderboard');
-
+        const embed = createRankEmbed(rank ? `${rank} Leaderboard` : 'Overall Leaderboard');
+        
         if (rank) {
             // Single rank leaderboard
             const userScores = [];
@@ -169,17 +294,24 @@ client.on('messageCreate', async (message) => {
                     if (user) userScores.push({ username: user.username, wins });
                 }
             }
-
+            
             userScores.sort((a, b) => b.wins - a.wins);
             
             if (userScores.length === 0) {
                 embed.setDescription('No scores for this rank yet.');
             } else {
-                const topTen = userScores.slice(0, 10);
-                let description = '';
-                topTen.forEach((score, index) => {
-                    description += `**${index + 1}.** ${score.username}: ${score.wins} wins\n`;
+                let description = `${getRankEmoji(rank)} **${rank} Rank**\n\n`;
+                
+                userScores.slice(0, 10).forEach((score, index) => {
+                    // Add medals for top 3
+                    let prefix = `${index + 1}.`;
+                    if (index === 0) prefix = '🥇';
+                    else if (index === 1) prefix = '🥈';
+                    else if (index === 2) prefix = '🥉';
+                    
+                    description += `**${prefix}** ${score.username}: ${score.wins} wins\n`;
                 });
+                
                 embed.setDescription(description);
             }
         } else {
@@ -196,44 +328,48 @@ client.on('messageCreate', async (message) => {
                     if (user) userTotalScores.push({ username: user.username, wins: totalWins });
                 }
             }
-
+            
             userTotalScores.sort((a, b) => b.wins - a.wins);
             
             if (userTotalScores.length === 0) {
                 embed.setDescription('No scores recorded yet.');
             } else {
-                const topTen = userTotalScores.slice(0, 10);
-                let description = '';
-                topTen.forEach((score, index) => {
-                    description += `**${index + 1}.** ${score.username}: ${score.wins} total wins\n`;
+                let description = '**Overall Standings**\n\n';
+                
+                userTotalScores.slice(0, 10).forEach((score, index) => {
+                    // Add medals for top 3
+                    let prefix = `${index + 1}.`;
+                    if (index === 0) prefix = '🥇';
+                    else if (index === 1) prefix = '🥈';
+                    else if (index === 2) prefix = '🥉';
+                    
+                    description += `**${prefix}** ${score.username}: ${score.wins} total wins\n`;
                 });
+                
                 embed.setDescription(description);
             }
         }
-
-        message.reply({ embeds: [embed] });
+        
+        await interaction.reply({ embeds: [embed] });
         return;
     }
     
     // Overview command - shows all users and their wins across all ranks in a table format
-    if (command === 'overview') {
+    if (commandName === 'scoreboard-overview') {
         // Get all users who have at least one win
         const userIds = Object.keys(data.scores).filter(userId => {
             return RANKS.some(rank => (data.scores[userId][rank] || 0) > 0);
         });
         
         if (userIds.length === 0) {
-            message.reply('No scores recorded yet.');
+            await interaction.reply('No scores recorded yet.');
             return;
         }
         
-        // Create an overview embed
-        const embed = new EmbedBuilder()
-            .setColor('#0099ff')
-            .setTitle('BO7-Scoreboard Overview')
-            .setDescription('All users and their wins across all ranks:');
-            
-        // Create a field for each user
+        // Create a fancy overview embed
+        const embed = createRankEmbed('Complete Scoreboard Overview', 'All users and their wins across all ranks:');
+        
+        // Process data for each user
         const userEmbeds = [];
         
         for (const userId of userIds) {
@@ -246,18 +382,18 @@ client.on('messageCreate', async (message) => {
                 RANKS.forEach(rank => {
                     const wins = data.scores[userId][rank] || 0;
                     if (wins > 0) {
-                        fieldValue += `**${rank}**: ${wins} wins\n`;
+                        fieldValue += `${getRankEmoji(rank)} **${rank}**: ${wins} wins\n`;
                         totalWins += wins;
                     }
                 });
                 
                 // Add total wins at the end
-                fieldValue += `\n**Total**: ${totalWins} wins`;
+                fieldValue += `\n🔥 **Total**: ${totalWins} wins`;
                 
                 // Add to embed if there are any wins
                 if (totalWins > 0) {
                     userEmbeds.push({
-                        name: user.username,
+                        name: `${user.username}`,
                         value: fieldValue,
                         inline: true,
                         totalWins: totalWins // Used for sorting
@@ -277,70 +413,58 @@ client.on('messageCreate', async (message) => {
             embed.addFields(fieldData);
         });
         
-        message.reply({ embeds: [embed] });
+        await interaction.reply({ embeds: [embed] });
         return;
     }
-
+    
     // Admin commands from here
-    if (['addwin', 'removewin', 'setwins'].includes(command)) {
+    if (['scoreboard-addwin', 'scoreboard-removewin', 'scoreboard-setwins'].includes(commandName)) {
         // Check if user has admin role
-        if (!isAdmin(message.member)) {
-            message.reply('You do not have permission to use this command.');
+        if (!(await isAdmin(interaction.member))) {
+            await interaction.reply({ content: 'You do not have permission to use this command.', ephemeral: true });
             return;
         }
-
-        const mentionedUser = message.mentions.users.first();
-        if (!mentionedUser) {
-            message.reply('Please mention a user.');
-            return;
-        }
-
+        
+        const mentionedUser = interaction.options.getUser('user');
         const userId = mentionedUser.id;
-        const rankArg = args[1];
+        const rank = interaction.options.getString('rank');
         
-        if (!rankArg) {
-            message.reply('Please specify a rank.');
-            return;
-        }
-        
-        const rank = rankArg.charAt(0).toUpperCase() + rankArg.slice(1).toLowerCase();
-        
-        if (!RANKS.includes(rank)) {
-            message.reply(`Invalid rank. Available ranks: ${RANKS.join(', ')}`);
-            return;
-        }
-
         // Initialize user if not exists
         if (!data.scores[userId]) {
             data.scores[userId] = {};
             RANKS.forEach(r => data.scores[userId][r] = 0);
         }
-
-        if (command === 'addwin') {
+        
+        if (commandName === 'scoreboard-addwin') {
             // Add a win
             data.scores[userId][rank] = (data.scores[userId][rank] || 0) + 1;
             saveData(data);
-            message.reply(`Added a win for ${mentionedUser.username} in ${rank}. They now have ${data.scores[userId][rank]} wins.`);
-        } else if (command === 'removewin') {
+            
+            const embed = createRankEmbed('Win Added', `Added a win for ${mentionedUser.username} in ${getRankEmoji(rank)} **${rank}**.\n\nThey now have **${data.scores[userId][rank]} wins** in this rank.`);
+            
+            await interaction.reply({ embeds: [embed] });
+        } else if (commandName === 'scoreboard-removewin') {
             // Remove a win
             if (data.scores[userId][rank] > 0) {
                 data.scores[userId][rank]--;
                 saveData(data);
-                message.reply(`Removed a win from ${mentionedUser.username} in ${rank}. They now have ${data.scores[userId][rank]} wins.`);
+                
+                const embed = createRankEmbed('Win Removed', `Removed a win from ${mentionedUser.username} in ${getRankEmoji(rank)} **${rank}**.\n\nThey now have **${data.scores[userId][rank]} wins** in this rank.`);
+                
+                await interaction.reply({ embeds: [embed] });
             } else {
-                message.reply(`${mentionedUser.username} has no wins to remove in ${rank}.`);
+                await interaction.reply({ content: `${mentionedUser.username} has no wins to remove in ${rank}.`, ephemeral: true });
             }
-        } else if (command === 'setwins') {
+        } else if (commandName === 'scoreboard-setwins') {
             // Set wins to a specific value
-            const wins = parseInt(args[2]);
-            if (isNaN(wins) || wins < 0) {
-                message.reply('Please provide a valid number of wins (0 or higher).');
-                return;
-            }
+            const wins = interaction.options.getInteger('wins');
             
             data.scores[userId][rank] = wins;
             saveData(data);
-            message.reply(`Set ${mentionedUser.username}'s wins in ${rank} to ${wins}.`);
+            
+            const embed = createRankEmbed('Wins Updated', `Set ${mentionedUser.username}'s wins in ${getRankEmoji(rank)} **${rank}** to **${wins}**.`);
+            
+            await interaction.reply({ embeds: [embed] });
         }
         
         return;
