@@ -1,5 +1,5 @@
 // Discord BO7-Scoreboard Bot with Rocket League ranks using slash commands
-const { Client, GatewayIntentBits, Partials, EmbedBuilder, PermissionFlagsBits, REST, Routes, SlashCommandBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, EmbedBuilder, PermissionFlagsBits, REST, Routes, SlashCommandBuilder, MessageFlags } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
@@ -21,7 +21,16 @@ const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMembers
-    ]
+    ],
+    // Add better reconnection options
+    restRequestTimeout: 60000,
+    restGlobalRateLimit: 50,
+    // Don't give up on reconnecting
+    retryLimit: Infinity,
+    // Better heartbeat settings
+    ws: {
+        large_threshold: 50
+    }
 });
 
 // Define the ranks
@@ -50,7 +59,7 @@ function loadData() {
         console.error('Error loading data:', error);
     }
     // Return empty data structure if file doesn't exist or error occurs
-    return { scores: {} };
+    return { scores: {}, matches: [] };
 }
 
 // Function to save data
@@ -148,6 +157,57 @@ const commands = [
                 .setDescription('The number of wins to set')
                 .setRequired(true)
                 .setMinValue(0)),
+                
+    // New Match Result Command
+    new SlashCommandBuilder()
+        .setName('scoreboard-matchresult')
+        .setDescription('Reports a Bo7 match result between two players')
+        .addUserOption(option => 
+            option.setName('player1')
+                .setDescription('First player in the match')
+                .setRequired(true))
+        .addUserOption(option => 
+            option.setName('player2')
+                .setDescription('Second player in the match')
+                .setRequired(true))
+        .addStringOption(option => 
+            option.setName('rank')
+                .setDescription('The rank the match was played at')
+                .setRequired(true)
+                .addChoices(
+                    ...RANKS.map(rank => ({ name: rank, value: rank }))
+                ))
+        .addUserOption(option => 
+            option.setName('winner')
+                .setDescription('The player who won the match')
+                .setRequired(true))
+        .addIntegerOption(option => 
+            option.setName('winner_score')
+                .setDescription('Number of games won by the winner (default: 4 in a Bo7)')
+                .setRequired(false)
+                .setMinValue(1)
+                .setMaxValue(7))
+        .addIntegerOption(option => 
+            option.setName('loser_score')
+                .setDescription('Number of games won by the loser')
+                .setRequired(true)
+                .setMinValue(0)
+                .setMaxValue(6)),
+    
+    // Match History Command
+    new SlashCommandBuilder()
+        .setName('scoreboard-matchhistory')
+        .setDescription('Shows recent match history')
+        .addUserOption(option => 
+            option.setName('user')
+                .setDescription('Filter history to a specific user')
+                .setRequired(false))
+        .addIntegerOption(option => 
+            option.setName('limit')
+                .setDescription('Number of matches to show (default: 5)')
+                .setRequired(false)
+                .setMinValue(1)
+                .setMaxValue(25)),
 ];
 
 // Helper to create fancy embed designs
@@ -170,17 +230,51 @@ function createRankEmbed(title, description = null) {
     return embed;
 }
 
-// Function to get rank emoji
+// Function to create a match result embed
+function createMatchResultEmbed(match) {
+    const embed = createRankEmbed('Bo7 Match Result', `Match played in ${getRankEmoji(match.rank)} **${match.rank}**`);
+    
+    // Format the result prominently
+    embed.addFields(
+        { 
+            name: 'Players', 
+            value: `**${match.player1.username}** vs **${match.player2.username}**`, 
+            inline: false 
+        },
+        { 
+            name: 'Result', 
+            value: `**${match.winner.username}** defeated **${match.loser.username}**\n**${match.winnerScore}-${match.loserScore}**`, 
+            inline: false 
+        }
+    );
+    
+    // Add visual winner indicator with trophy emoji
+    embed.addFields({ 
+        name: 'Winner', 
+        value: `🏆 **${match.winner.username}** 🏆`, 
+        inline: false 
+    });
+    
+    // Add match date
+    const matchDate = new Date(match.date);
+    embed.setTimestamp(matchDate);
+    
+    return embed;
+}
+
+// Function to get rank emoji - uses custom server emoji
 function getRankEmoji(rank) {
+    // Replace these IDs with the actual emoji IDs from your server
+    // To get an emoji ID, type \:your_emoji: in Discord chat
     const emojiMap = {
-        'Bronze': '<:bronze:1361354230920909101>',
-        'Silver': '<:silver:1361353806125994135>',
-        'Gold': '<:gold:1361352717515227288>',
-        'Platinum': '<:platinum:1361353305254531096>',
-        'Diamond': '<:diamond:1361353672180764786>',
-        'Champion': '<:champ:1361352751669313566>',
-        'Grand Champion': '<:grandchamp:1361354065295966378>',
-        'Super Sonic Legend': '<:ssl:1361353029240094923>'
+        'Bronze': '<:bronze:1234567890>',
+        'Silver': '<:silver:1234567890>',
+        'Gold': '<:gold:1234567890>',
+        'Platinum': '<:platinum:1234567890>',
+        'Diamond': '<:diamond:1234567890>',
+        'Champion': '<:champion:1234567890>',
+        'Grand Champion': '<:grandchampion:1234567890>',
+        'Super Sonic Legend': '<:ssl:1234567890>'
     };
     
     return emojiMap[rank] || '🎮';
@@ -208,11 +302,34 @@ client.once('ready', () => {
         }
     })();
     
-    // Set up a self-ping every 2 minutes to prevent the bot from sleeping on Render
+    // Set up a more effective keep-alive mechanism
+    // Ping Discord API every minute to keep connection alive
     setInterval(() => {
-        console.log(`[${new Date().toISOString()}] Keeping bot awake with ping`);
-        // You can also add additional health check logic here if needed
-    }, 2 * 60 * 1000); // 2 minutes in milliseconds
+        console.log(`[${new Date().toISOString()}] Keeping bot connection alive with API ping`);
+        
+        // Perform a lightweight API request to keep the connection fresh
+        client.guilds.fetch(client.guilds.cache.first()?.id || '0')
+            .then(() => console.log("Successfully pinged Discord API"))
+            .catch(err => console.error("Error pinging Discord API:", err));
+            
+    }, 60 * 1000); // Every minute
+});
+
+// Add reconnection handlers
+client.on('disconnect', (event) => {
+    console.error(`Bot disconnected with code ${event.code}. Reason: ${event.reason}`);
+});
+
+client.on('reconnecting', () => {
+    console.log('Bot is reconnecting...');
+});
+
+client.on('resumed', (replayed) => {
+    console.log(`Bot connection resumed. ${replayed} events replayed.`);
+});
+
+client.on('error', (error) => {
+    console.error('Discord client error:', error);
 });
 
 // Interaction handler
@@ -227,6 +344,11 @@ client.on('interactionCreate', async interaction => {
         data.scores = {};
     }
     
+    // Initialize matches array if it doesn't exist
+    if (!data.matches) {
+        data.matches = [];
+    }
+    
     const commandName = interaction.commandName;
     
     // Help command
@@ -238,6 +360,8 @@ client.on('interactionCreate', async interaction => {
             { name: '/scoreboard-stats [user]', value: 'Shows stats for a user (or yourself if no user is specified)', inline: false },
             { name: '/scoreboard-leaderboard [rank]', value: 'Shows leaderboard for all ranks or a specific rank', inline: false },
             { name: '/scoreboard-overview', value: 'Shows a comprehensive overview of all users and their wins across all ranks', inline: false },
+            { name: '/scoreboard-matchresult', value: 'Record a Bo7 match result between two players', inline: false },
+            { name: '/scoreboard-matchhistory [user] [limit]', value: 'Show recent match history for all users or a specific user', inline: false },
             { name: '**Admin Commands**', value: 'The following commands require the Admin role:', inline: false },
             { name: '/scoreboard-addwin <user> <rank>', value: 'Adds a win for a user in the specified rank', inline: false },
             { name: '/scoreboard-removewin <user> <rank>', value: 'Removes a win for a user in the specified rank', inline: false },
@@ -417,11 +541,160 @@ client.on('interactionCreate', async interaction => {
         return;
     }
     
+    // Match result command
+    if (commandName === 'scoreboard-matchresult') {
+        const player1 = interaction.options.getUser('player1');
+        const player2 = interaction.options.getUser('player2');
+        const rank = interaction.options.getString('rank');
+        const winner = interaction.options.getUser('winner');
+        const winnerScore = interaction.options.getInteger('winner_score') || 4; // Default to 4 for Bo7
+        const loserScore = interaction.options.getInteger('loser_score');
+        
+        // Validate the input
+        if (winner.id !== player1.id && winner.id !== player2.id) {
+            await interaction.reply({ 
+                content: 'The winner must be one of the two players in the match.',
+                ephemeral: true
+            });
+            return;
+        }
+        
+        // Determine the loser
+        const loser = winner.id === player1.id ? player2 : player1;
+        
+        // Create a match record in the data object
+        if (!data.matches) {
+            data.matches = [];
+        }
+        
+        // Add the match to the history
+        const matchData = {
+            player1: {
+                id: player1.id,
+                username: player1.username
+            },
+            player2: {
+                id: player2.id,
+                username: player2.username
+            },
+            rank: rank,
+            winner: {
+                id: winner.id,
+                username: winner.username
+            },
+            loser: {
+                id: loser.id,
+                username: loser.username
+            },
+            winnerScore: winnerScore,
+            loserScore: loserScore,
+            date: new Date().toISOString()
+        };
+        
+        data.matches.push(matchData);
+        
+        // If user has admin permissions, automatically update the win count
+        if (await isAdmin(interaction.member)) {
+            // Initialize users if not exists
+            if (!data.scores[winner.id]) {
+                data.scores[winner.id] = {};
+                RANKS.forEach(r => data.scores[winner.id][r] = 0);
+            }
+            
+            // Add win to the winner's record
+            data.scores[winner.id][rank] = (data.scores[winner.id][rank] || 0) + 1;
+            
+            saveData(data);
+            
+            // Create rich embed for match result
+            const embed = createMatchResultEmbed(matchData);
+            
+            // Add a notice that the win was automatically recorded
+            embed.addFields({ name: 'Win Recorded', value: `A win has been automatically added to ${winner.username}'s record in ${rank}.` });
+            
+            await interaction.reply({ embeds: [embed] });
+        } else {
+            // User doesn't have admin rights - just report the match result without adding wins
+            saveData(data);
+            
+            // Create rich embed for match result
+            const embed = createMatchResultEmbed(matchData);
+            
+            // Add a note that an admin needs to record the win
+            embed.addFields({ name: 'Note', value: 'This match result has been saved, but an admin needs to use `/scoreboard-addwin` to update the win record.' });
+            
+            await interaction.reply({ embeds: [embed] });
+        }
+        
+        return;
+    }
+    
+    // Match history command
+    if (commandName === 'scoreboard-matchhistory') {
+        const targetUser = interaction.options.getUser('user');
+        const limit = interaction.options.getInteger('limit') || 5;
+        
+        // Check if we have any match history
+        if (!data.matches || data.matches.length === 0) {
+            await interaction.reply('No match history recorded yet.');
+            return;
+        }
+        
+        // Filter matches for the specific user if provided
+        let filteredMatches = data.matches;
+        if (targetUser) {
+            filteredMatches = data.matches.filter(match => 
+                match.player1.id === targetUser.id || match.player2.id === targetUser.id
+            );
+            
+            if (filteredMatches.length === 0) {
+                await interaction.reply(`No match history found for ${targetUser.username}.`);
+                return;
+            }
+        }
+        
+        // Sort matches by date (newest first)
+        filteredMatches.sort((a, b) => new Date(b.date) - new Date(a.date));
+        
+        // Create embed
+        const title = targetUser 
+            ? `Match History for ${targetUser.username}`
+            : 'Recent Match History';
+            
+        const embed = createRankEmbed(title);
+        
+        // Add the most recent matches
+        const matchesToShow = filteredMatches.slice(0, limit);
+        
+        let description = '';
+        matchesToShow.forEach((match, index) => {
+            const matchDate = new Date(match.date);
+            const formattedDate = `${matchDate.toLocaleDateString()} ${matchDate.toLocaleTimeString()}`;
+            
+            description += `**Match ${index + 1}** - ${formattedDate}\n`;
+            description += `${getRankEmoji(match.rank)} **${match.rank}**\n`;
+            description += `${match.player1.username} vs ${match.player2.username}\n`;
+            description += `Winner: **${match.winner.username}** (${match.winnerScore}-${match.loserScore})\n\n`;
+        });
+        
+        embed.setDescription(description);
+        
+        if (filteredMatches.length > limit) {
+            embed.setFooter({ 
+                text: `Showing ${limit} of ${filteredMatches.length} matches. Use /scoreboard-matchhistory with a higher limit to see more.`,
+                iconURL: 'https://i.imgur.com/6cY7QT7.png' 
+            });
+        }
+        
+        await interaction.reply({ embeds: [embed] });
+        return;
+    }
+    
     // Admin commands from here
     if (['scoreboard-addwin', 'scoreboard-removewin', 'scoreboard-setwins'].includes(commandName)) {
         // Check if user has admin role
         if (!(await isAdmin(interaction.member))) {
-            await interaction.reply({ content: 'You do not have permission to use this command.', ephemeral: true });
+            await interaction.reply({ content: 'You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
             return;
         }
         
@@ -453,7 +726,7 @@ client.on('interactionCreate', async interaction => {
                 
                 await interaction.reply({ embeds: [embed] });
             } else {
-                await interaction.reply({ content: `${mentionedUser.username} has no wins to remove in ${rank}.`, ephemeral: true });
+                await interaction.reply({ content: `${mentionedUser.username} has no wins to remove in ${rank}.`, flags: MessageFlags.Ephemeral });
             }
         } else if (commandName === 'scoreboard-setwins') {
             // Set wins to a specific value
@@ -471,10 +744,26 @@ client.on('interactionCreate', async interaction => {
     }
 });
 
-// Create a simple HTTP server for Render.com
+// Create a more robust HTTP server for Render.com
 const server = http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('BO7-Scoreboard Bot is running!\n');
+    if (req.url === '/health') {
+        // Health check endpoint
+        const healthStatus = {
+            status: 'up',
+            timestamp: new Date().toISOString(),
+            discordConnection: client.ws.status === 0 ? 'connected' : 'disconnected',
+            uptime: process.uptime(),
+            readyAt: client.readyAt ? client.readyAt.toISOString() : null,
+            ping: client.ws.ping
+        };
+        
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(healthStatus, null, 2));
+    } else {
+        // Standard response
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('BO7-Scoreboard Bot is running!\n');
+    }
 });
 
 // Use the PORT environment variable provided by Render.com or default to 3000
