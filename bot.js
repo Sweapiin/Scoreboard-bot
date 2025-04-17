@@ -3,6 +3,7 @@ const { Client, GatewayIntentBits, Partials, EmbedBuilder, PermissionFlagsBits, 
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const PORT = process.env.PORT || 3000;
 
 // Try to load environment variables from .env file if dotenv is available
 try {
@@ -463,8 +464,7 @@ function getRankEmoji(rank) {
 async function pingOwnServer() {
     try {
         // Get your app URL from environment variable or use a default one
-        // Change this to your actual app URL on Render
-        const appUrl = process.env.APP_URL || "https://scoreboard-bot-hzxi.onrender.com";
+        const appUrl = process.env.APP_URL || `http://localhost:${PORT}`;
         
         console.log(`[${new Date().toISOString()}] Attempting to ping self at ${appUrl}/ping`);
         
@@ -560,6 +560,19 @@ client.once('ready', () => {
     }, BACKUP_INTERVAL);
     console.log(`Automatic backup system initialized. Backups will be created every ${BACKUP_INTERVAL/(1000*60*60)} hours.`);
     
+    const server = http.createServer((req, res) => {
+        if (req.url === '/ping') {
+            res.writeHead(200);
+            res.end('pong');
+        } else {
+            res.writeHead(200);
+            res.end('BO7-Scoreboard Bot is running!');
+        }
+    });
+    server.listen(PORT, () => {
+        console.log(`HTTP server started on port ${PORT}`);
+    });
+
     // More robust keep-alive mechanism
     setInterval(() => {
         try {
