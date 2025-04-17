@@ -1,5 +1,5 @@
 // Discord BO7-Scoreboard Bot with Rocket League ranks using slash commands
-const { Client, GatewayIntentBits, Partials, EmbedBuilder, PermissionFlagsBits, REST, Routes, SlashCommandBuilder, MessageFlags } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, EmbedBuilder, PermissionFlagsBits, REST, Routes, SlashCommandBuilder, MessageFlags, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
@@ -48,7 +48,134 @@ const RANKS = [
 // Path to the data file
 const DATA_FILE = path.join(__dirname, 'scores.json');
 
-// Function to load data
+// Directory for backup files
+const BACKUP_DIR = path.join(__dirname, 'backups');
+const MAX_BACKUPS = 5;
+const BACKUP_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+
+// Ensure backup directory exists
+if (!fs.existsSync(BACKUP_DIR)) {
+    try {
+        fs.mkdirSync(BACKUP_DIR, { recursive: true });
+        console.log(`Created backup directory at: ${BACKUP_DIR}`);
+    } catch (error) {
+        console.error(`Failed to create backup directory: ${error.message}`);
+    }
+}
+
+// Helper function to get the user's display name
+async function getDisplayName(userId, interaction) {
+    try {
+        // Get the member from the guild
+        const member = await interaction.guild.members.fetch(userId);
+        // Return the member's display name (nickname if set, otherwise username)
+        return member ? member.displayName : 'Unknown User';
+    } catch (error) {
+        console.error(`Error fetching display name for user ${userId}:`, error);
+        // Fallback to username if available, otherwise show 'Unknown User'
+        try {
+            const user = await client.users.fetch(userId);
+            return user ? user.username : 'Unknown User';
+        } catch (err) {
+            console.error(`Error fetching user ${userId}:`, err);
+            return 'Unknown User';
+        }
+    }
+}
+
+// Function to create a backup
+async function createBackup() {
+    try {
+        // Create timestamp for filename
+        const timestamp = new Date().toISOString().replace(/:/g, '-');
+        const backupFilename = path.join(BACKUP_DIR, `scores_backup_${timestamp}.json`);
+        
+        // Check if original file exists
+        if (fs.existsSync(DATA_FILE)) {
+            // Copy the file
+            fs.copyFileSync(DATA_FILE, backupFilename);
+            console.log(`[${new Date().toISOString()}] Created backup: ${backupFilename}`);
+            
+            // Clean up old backups
+            cleanupOldBackups();
+            return true;
+        } else {
+            console.log(`[${new Date().toISOString()}] Backup failed: Data file does not exist`);
+            return false;
+        }
+    } catch (error) {
+        console.error(`[${new Date().toISOString()}] Backup failed:`, error);
+        return false;
+    }
+}
+
+// Function to clean up old backups
+function cleanupOldBackups() {
+    try {
+        // List all backup files and sort by creation time
+        const backupFiles = fs.readdirSync(BACKUP_DIR)
+            .filter(file => file.startsWith('scores_backup_'))
+            .map(file => ({
+                name: file,
+                path: path.join(BACKUP_DIR, file),
+                ctime: fs.statSync(path.join(BACKUP_DIR, file)).ctime
+            }))
+            .sort((a, b) => b.ctime - a.ctime);
+        
+        // Remove excess backups
+        for (const oldFile of backupFiles.slice(MAX_BACKUPS)) {
+            fs.unlinkSync(oldFile.path);
+            console.log(`Removed old backup: ${oldFile.name}`);
+        }
+    } catch (error) {
+        console.error('Error cleaning up old backups:', error);
+    }
+}
+
+// Function to list available backups
+function listAvailableBackups() {
+    try {
+        return fs.readdirSync(BACKUP_DIR)
+            .filter(file => file.startsWith('scores_backup_'))
+            .map(file => ({
+                name: file,
+                path: path.join(BACKUP_DIR, file),
+                ctime: fs.statSync(path.join(BACKUP_DIR, file)).ctime
+            }))
+            .sort((a, b) => b.ctime - a.ctime);
+    } catch (error) {
+        console.error('Error listing backups:', error);
+        return [];
+    }
+}
+
+// Function to restore from backup
+function restoreFromBackup(backupPath) {
+    try {
+        if (fs.existsSync(backupPath)) {
+            // Create a backup of current data before restoring (if it exists)
+            if (fs.existsSync(DATA_FILE)) {
+                const timestamp = new Date().toISOString().replace(/:/g, '-');
+                const preRestoreBackup = path.join(BACKUP_DIR, `pre_restore_${timestamp}.json`);
+                fs.copyFileSync(DATA_FILE, preRestoreBackup);
+                console.log(`Created pre-restore backup: ${preRestoreBackup}`);
+            }
+            
+            // Copy backup file to main data file
+            fs.copyFileSync(backupPath, DATA_FILE);
+            console.log(`Restored from backup: ${backupPath}`);
+            return true;
+        } else {
+            console.error(`Backup file not found: ${backupPath}`);
+            return false;
+        }
+    } catch (error) {
+        console.error('Error restoring from backup:', error);
+        return false;
+    }
+}
+
+// Function to load data with improved error handling
 function loadData() {
     try {
         if (fs.existsSync(DATA_FILE)) {
@@ -57,26 +184,60 @@ function loadData() {
         }
     } catch (error) {
         console.error('Error loading data:', error);
+        
+        // Try to recover from the most recent backup
+        const backups = listAvailableBackups();
+        
+        if (backups.length > 0) {
+            try {
+                console.log(`Attempting to recover from most recent backup: ${backups[0].name}`);
+                const backupData = fs.readFileSync(backups[0].path, 'utf8');
+                const parsedData = JSON.parse(backupData);
+                
+                // Save the recovered data to the main file
+                saveData(parsedData);
+                
+                console.log('Successfully recovered data from backup');
+                return parsedData;
+            } catch (backupError) {
+                console.error('Error recovering from backup:', backupError);
+            }
+        }
     }
     // Return empty data structure if file doesn't exist or error occurs
     return { scores: {}, matches: [] };
 }
 
-// Function to save data
+// Function to save data with improved error handling
 function saveData(data) {
     try {
+        // Create a temporary file first
+        const tempFile = `${DATA_FILE}.temp`;
         const jsonData = JSON.stringify(data, null, 2);
-        fs.writeFileSync(DATA_FILE, jsonData, 'utf8');
+        
+        // Write to temp file
+        fs.writeFileSync(tempFile, jsonData, 'utf8');
+        
+        // Rename temp file to actual file (atomic operation)
+        fs.renameSync(tempFile, DATA_FILE);
+        
+        return true;
     } catch (error) {
         console.error('Error saving data:', error);
+        return false;
     }
 }
 
 // Check if user has admin role
 async function isAdmin(member) {
     if (!member) return false;
-    await member.fetch();
-    return member.roles.cache.some(role => role.name === config.adminRoleName);
+    try {
+        await member.fetch();
+        return member.roles.cache.some(role => role.name === config.adminRoleName);
+    } catch (error) {
+        console.error(`Error checking admin role: ${error.message}`);
+        return false;
+    }
 }
 
 // Define slash commands
@@ -158,41 +319,41 @@ const commands = [
                 .setRequired(true)
                 .setMinValue(0)),
                 
-    // New Match Result Command
+    // Match Result Command (now admin-only)
     new SlashCommandBuilder()
-    .setName('scoreboard-matchresult')
-    .setDescription('Reports a Bo7 match result between two players')
-    .addUserOption(option => 
-        option.setName('player1')
-            .setDescription('First player in the match')
-            .setRequired(true))
-    .addUserOption(option => 
-        option.setName('player2')
-            .setDescription('Second player in the match')
-            .setRequired(true))
-    .addStringOption(option => 
-        option.setName('rank')
-            .setDescription('The rank the match was played at')
-            .setRequired(true)
-            .addChoices(
-                ...RANKS.map(rank => ({ name: rank, value: rank }))
-            ))
-    .addUserOption(option => 
-        option.setName('winner')
-            .setDescription('The player who won the match')
-            .setRequired(true))
-    .addIntegerOption(option => 
-        option.setName('winner_score')
-            .setDescription('Number of games won by the winner (default: 4 in a Bo7)')
-            .setRequired(true)
-            .setMinValue(1)
-            .setMaxValue(7))
-    .addIntegerOption(option => 
-        option.setName('loser_score')
-            .setDescription('Number of games won by the loser')
-            .setRequired(true)
-            .setMinValue(0)
-            .setMaxValue(6)),
+        .setName('scoreboard-matchresult')
+        .setDescription('Reports a Bo7 match result between two players (Admin only)')
+        .addUserOption(option => 
+            option.setName('player1')
+                .setDescription('First player in the match')
+                .setRequired(true))
+        .addUserOption(option => 
+            option.setName('player2')
+                .setDescription('Second player in the match')
+                .setRequired(true))
+        .addStringOption(option => 
+            option.setName('rank')
+                .setDescription('The rank the match was played at')
+                .setRequired(true)
+                .addChoices(
+                    ...RANKS.map(rank => ({ name: rank, value: rank }))
+                ))
+        .addUserOption(option => 
+            option.setName('winner')
+                .setDescription('The player who won the match')
+                .setRequired(true))
+        .addIntegerOption(option => 
+            option.setName('winner_score')
+                .setDescription('Number of games won by the winner (default: 4 in a Bo7)')
+                .setRequired(true)
+                .setMinValue(1)
+                .setMaxValue(7))
+        .addIntegerOption(option => 
+            option.setName('loser_score')
+                .setDescription('Number of games won by the loser')
+                .setRequired(true)
+                .setMinValue(0)
+                .setMaxValue(6)),
     
     // Match History Command
     new SlashCommandBuilder()
@@ -208,6 +369,23 @@ const commands = [
                 .setRequired(false)
                 .setMinValue(1)
                 .setMaxValue(25)),
+        
+    // New Backup Commands
+    new SlashCommandBuilder()
+        .setName('scoreboard-backup')
+        .setDescription('Manually create a backup of the scoreboard data (Admin only)'),
+    
+    new SlashCommandBuilder()
+        .setName('scoreboard-listbackups')
+        .setDescription('List available backups (Admin only)'),
+        
+    new SlashCommandBuilder()
+        .setName('scoreboard-restore')
+        .setDescription('Restore scoreboard data from a backup (Admin only)')
+        .addStringOption(option => 
+            option.setName('backup')
+                .setDescription('Backup number (1-based) or "latest"')
+                .setRequired(true)),
 ];
 
 // Helper to create fancy embed designs
@@ -365,57 +543,87 @@ client.once('ready', () => {
         }
     })();
     
+    // Create an initial backup when the bot starts
+    createBackup().then(success => {
+        if (success) {
+            console.log('Initial backup created successfully');
+        }
+    }).catch(error => {
+        console.error('Failed to create initial backup:', error);
+    });
+    
+    // Schedule regular backups
+    setInterval(() => {
+        createBackup().catch(error => {
+            console.error('Failed to create scheduled backup:', error);
+        });
+    }, BACKUP_INTERVAL);
+    console.log(`Automatic backup system initialized. Backups will be created every ${BACKUP_INTERVAL/(1000*60*60)} hours.`);
+    
     // More robust keep-alive mechanism
     setInterval(() => {
-        console.log(`[${new Date().toISOString()}] Running keep-alive checks...`);
-        
-        // 1. Check connection status
-        const status = client.ws.status;
-        if (status !== 0) {
-            console.log(`WebSocket connection is not READY (status: ${status}), attempting to reconnect...`);
-            client.destroy().then(() => client.login(process.env.DISCORD_TOKEN));
-        } else {
-            console.log(`WebSocket connection is healthy (status: ${status})`);
-        }
-        
-        // 2. Ping all guilds (more thorough than just the first one)
-        client.guilds.fetch()
-            .then(guilds => {
-                console.log(`Successfully fetched ${guilds.size} guilds`);
-                // Fetch the first guild instead of using random() which might not exist
-                if (guilds.size > 0) {
-                    const firstGuildId = guilds.first()?.id;
-                    if (firstGuildId) {
-                        return client.guilds.fetch(firstGuildId);
-                    }
-                }
-                return null;
-            })
-            .then(guild => {
-                if (guild) {
-                    console.log(`Successfully fetched guild: ${guild.name}`);
-                    // The fetch itself is enough to keep the connection alive
-                }
-            })
-            .catch(err => console.error("Error in keep-alive process:", err));
+        try {
+            console.log(`[${new Date().toISOString()}] Running keep-alive checks...`);
             
+            // 1. Check connection status
+            const status = client.ws.status;
+            if (status !== 0) {
+                console.log(`WebSocket connection is not READY (status: ${status}), attempting to reconnect...`);
+                client.destroy().then(() => client.login(process.env.DISCORD_TOKEN))
+                    .catch(err => console.error('Error during reconnection:', err));
+            } else {
+                console.log(`WebSocket connection is healthy (status: ${status})`);
+            }
+            
+            // 2. Ping all guilds (more thorough than just the first one)
+            client.guilds.fetch()
+                .then(guilds => {
+                    console.log(`Successfully fetched ${guilds.size} guilds`);
+                    // Fetch the first guild instead of using random() which might not exist
+                    if (guilds.size > 0) {
+                        const firstGuildId = guilds.first()?.id;
+                        if (firstGuildId) {
+                            return client.guilds.fetch(firstGuildId);
+                        }
+                    }
+                    return null;
+                })
+                .then(guild => {
+                    if (guild) {
+                        console.log(`Successfully fetched guild: ${guild.name}`);
+                        // The fetch itself is enough to keep the connection alive
+                    }
+                })
+                .catch(err => console.error("Error in keep-alive process:", err));
+        } catch (error) {
+            console.error("Error in keep-alive interval:", error);
+        }
     }, 30 * 1000); // Every 30 seconds (increased frequency)
 
     // Add a reconnection mechanism that actively checks
     setInterval(() => {
-        // If websocket is down but client thinks it's connected, force a reconnect
-        if (!client.ws.connection || client.ws.connection.readyState !== 1) {
-            console.log('WebSocket appears disconnected but client has not reconnected. Forcing reconnection...');
-            try {
-                client.destroy().then(() => client.login(process.env.DISCORD_TOKEN));
-            } catch (err) {
-                console.error('Error during forced reconnection:', err);
+        try {
+            // If websocket is down but client thinks it's connected, force a reconnect
+            if (!client.ws.connection || client.ws.connection.readyState !== 1) {
+                console.log('WebSocket appears disconnected but client has not reconnected. Forcing reconnection...');
+                try {
+                    client.destroy().then(() => client.login(process.env.DISCORD_TOKEN))
+                        .catch(err => console.error('Error during forced reconnection:', err));
+                } catch (err) {
+                    console.error('Error during forced reconnection:', err);
+                }
             }
+        } catch (error) {
+            console.error("Error in reconnection check interval:", error);
         }
     }, 5 * 60 * 1000); // Check every 5 minutes
     
     // Set up self-pinging every 2 minutes
-    setInterval(pingOwnServer, 2 * 60 * 1000);
+    setInterval(() => {
+        pingOwnServer().catch(error => {
+            console.error('Error during self-ping:', error);
+        });
+    }, 2 * 60 * 1000);
 });
 
 // Add reconnection handlers
@@ -467,12 +675,15 @@ client.on('interactionCreate', async interaction => {
                 { name: '/scoreboard-stats [user]', value: 'Shows stats for a user (or yourself if no user is specified)', inline: false },
                 { name: '/scoreboard-leaderboard [rank]', value: 'Shows leaderboard for all ranks or a specific rank', inline: false },
                 { name: '/scoreboard-overview', value: 'Shows a comprehensive overview of all users and their wins across all ranks', inline: false },
-                { name: '/scoreboard-matchresult', value: 'Record a Bo7 match result between two players', inline: false },
                 { name: '/scoreboard-matchhistory [user] [limit]', value: 'Show recent match history for all users or a specific user', inline: false },
                 { name: '**Admin Commands**', value: 'The following commands require the Admin role:', inline: false },
+                { name: '/scoreboard-matchresult', value: 'Record a Bo7 match result between two players (Admin only)', inline: false },
                 { name: '/scoreboard-addwin <user> <rank>', value: 'Adds a win for a user in the specified rank', inline: false },
                 { name: '/scoreboard-removewin <user> <rank>', value: 'Removes a win for a user in the specified rank', inline: false },
-                { name: '/scoreboard-setwins <user> <rank> <wins>', value: 'Sets the wins for a user in the specified rank to a specific value', inline: false }
+                { name: '/scoreboard-setwins <user> <rank> <wins>', value: 'Sets the wins for a user in the specified rank to a specific value', inline: false },
+                { name: '/scoreboard-backup', value: 'Manually create a backup of all data', inline: false },
+                { name: '/scoreboard-listbackups', value: 'List all available backups', inline: false },
+                { name: '/scoreboard-restore <backup>', value: 'Restore data from a backup', inline: false }
             );
             
             await safeReply(interaction, { embeds: [embed] });
@@ -487,13 +698,16 @@ client.on('interactionCreate', async interaction => {
             const targetUser = interaction.options.getUser('user') || interaction.user;
             const userId = targetUser.id;
             
+            // Get display name instead of username
+            const displayName = await getDisplayName(userId, interaction);
+            
             // Initialize user if not exists
             if (!data.scores[userId]) {
                 data.scores[userId] = {};
                 RANKS.forEach(rank => data.scores[userId][rank] = 0);
             }
             
-            const embed = createRankEmbed(`Stats for ${targetUser.username}`);
+            const embed = createRankEmbed(`Stats for ${displayName}`);
             embed.setThumbnail(targetUser.displayAvatarURL());
             
             let description = '';
@@ -527,8 +741,13 @@ client.on('interactionCreate', async interaction => {
                 for (const userId in data.scores) {
                     const wins = data.scores[userId][rank] || 0;
                     if (wins > 0) {
-                        const user = await client.users.fetch(userId).catch(() => null);
-                        if (user) userScores.push({ username: user.username, wins });
+                        try {
+                            // Get display name instead of username
+                            const displayName = await getDisplayName(userId, interaction);
+                            if (displayName) userScores.push({ username: displayName, wins });
+                        } catch (error) {
+                            console.error(`Error fetching user ${userId}:`, error);
+                        }
                     }
                 }
                 
@@ -561,8 +780,13 @@ client.on('interactionCreate', async interaction => {
                     });
                     
                     if (totalWins > 0) {
-                        const user = await client.users.fetch(userId).catch(() => null);
-                        if (user) userTotalScores.push({ username: user.username, wins: totalWins });
+                        try {
+                            // Get display name instead of username
+                            const displayName = await getDisplayName(userId, interaction);
+                            if (displayName) userTotalScores.push({ username: displayName, wins: totalWins });
+                        } catch (error) {
+                            console.error(`Error fetching user ${userId}:`, error);
+                        }
                     }
                 }
                 
@@ -591,7 +815,7 @@ client.on('interactionCreate', async interaction => {
             return;
         }
         
-        // Overview command - shows all users and their wins across all ranks in a table format
+        // Overview command - shows all users and their wins across all ranks
         if (commandName === 'scoreboard-overview') {
             // Defer reply as we're fetching multiple users (potentially many)
             await interaction.deferReply();
@@ -614,7 +838,8 @@ client.on('interactionCreate', async interaction => {
             
             for (const userId of userIds) {
                 try {
-                    const user = await client.users.fetch(userId);
+                    // Get display name instead of username
+                    const displayName = await getDisplayName(userId, interaction);
                     let fieldValue = '';
                     let totalWins = 0;
                     
@@ -633,7 +858,7 @@ client.on('interactionCreate', async interaction => {
                     // Add to embed if there are any wins
                     if (totalWins > 0) {
                         userEmbeds.push({
-                            name: `${user.username}`,
+                            name: `${displayName}`,
                             value: fieldValue,
                             inline: true,
                             totalWins: totalWins // Used for sorting
@@ -657,10 +882,19 @@ client.on('interactionCreate', async interaction => {
             return;
         }
         
-        // Match result command
+        // Match result command - NOW ADMIN ONLY
         if (commandName === 'scoreboard-matchresult') {
             // Defer reply as we need to verify permissions and save data
             await interaction.deferReply();
+            
+            // Check if user has admin role
+            if (!(await isAdmin(interaction.member))) {
+                await safeReply(interaction, { 
+                    content: 'You do not have permission to use this command. Only admins can record match results.',
+                    ephemeral: true 
+                });
+                return;
+            }
             
             const player1 = interaction.options.getUser('player1');
             const player2 = interaction.options.getUser('player2');
@@ -687,23 +921,29 @@ client.on('interactionCreate', async interaction => {
             }
             
             // Add the match to the history
+            const player1DisplayName = await getDisplayName(player1.id, interaction);
+            const player2DisplayName = await getDisplayName(player2.id, interaction);
+            const winnerDisplayName = winner.id === player1.id ? player1DisplayName : player2DisplayName;
+            const loserDisplayName = winner.id === player1.id ? player2DisplayName : player1DisplayName;
+            
+            // Add the match to the history
             const matchData = {
                 player1: {
                     id: player1.id,
-                    username: player1.username
+                    username: player1DisplayName
                 },
                 player2: {
                     id: player2.id,
-                    username: player2.username
+                    username: player2DisplayName
                 },
                 rank: rank,
                 winner: {
                     id: winner.id,
-                    username: winner.username
+                    username: winnerDisplayName
                 },
                 loser: {
                     id: loser.id,
-                    username: loser.username
+                    username: loserDisplayName
                 },
                 winnerScore: winnerScore,
                 loserScore: loserScore,
@@ -712,39 +952,30 @@ client.on('interactionCreate', async interaction => {
             
             data.matches.push(matchData);
             
-            // If user has admin permissions, automatically update the win count
-            if (await isAdmin(interaction.member)) {
-                // Initialize users if not exists
-                if (!data.scores[winner.id]) {
-                    data.scores[winner.id] = {};
-                    RANKS.forEach(r => data.scores[winner.id][r] = 0);
-                }
-                
-                // Add win to the winner's record
-                data.scores[winner.id][rank] = (data.scores[winner.id][rank] || 0) + 1;
-                
-                saveData(data);
-                
-                // Create rich embed for match result
-                const embed = createMatchResultEmbed(matchData);
-                
-                // Add a notice that the win was automatically recorded
-                embed.addFields({ name: 'Win Recorded', value: `A win has been automatically added to ${winner.username}'s record in ${rank}.` });
-                
-                await safeReply(interaction, { embeds: [embed] });
-            } else {
-                // User doesn't have admin rights - just report the match result without adding wins
-                saveData(data);
-                
-                // Create rich embed for match result
-                const embed = createMatchResultEmbed(matchData);
-                
-                // Add a note that an admin needs to record the win
-                embed.addFields({ name: 'Note', value: 'This match result has been saved, but an admin needs to use `/scoreboard-addwin` to update the win record.' });
-                
-                await safeReply(interaction, { embeds: [embed] });
+            // Initialize users if not exists
+            if (!data.scores[winner.id]) {
+                data.scores[winner.id] = {};
+                RANKS.forEach(r => data.scores[winner.id][r] = 0);
             }
             
+            // Add win to the winner's record
+            data.scores[winner.id][rank] = (data.scores[winner.id][rank] || 0) + 1;
+            
+            // Save data and create a backup
+            saveData(data);
+            try {
+                await createBackup();
+            } catch (error) {
+                console.error('Failed to create backup after match result:', error);
+            }
+            
+            // Create rich embed for match result
+            const embed = createMatchResultEmbed(matchData);
+            
+            // Add a notice that the win was recorded
+            embed.addFields({ name: 'Win Recorded', value: `A win has been automatically added to ${winnerDisplayName}'s record in ${rank}.` });
+            
+            await safeReply(interaction, { embeds: [embed] });
             return;
         }
         
@@ -770,7 +1001,7 @@ client.on('interactionCreate', async interaction => {
                 );
                 
                 if (filteredMatches.length === 0) {
-                    await safeReply(interaction, { content: `No match history found for ${targetUser.username}.` });
+                    await safeReply(interaction, { content: `No match history found for ${await getDisplayName(targetUser.id, interaction)}.` });
                     return;
                 }
             }
@@ -780,8 +1011,8 @@ client.on('interactionCreate', async interaction => {
             
             // Create embed
             const title = targetUser 
-                ? `Match History for ${targetUser.username}`
-                : 'Recent Match History';
+            ? `Match History for ${await getDisplayName(targetUser.id, interaction)}`
+            : 'Recent Match History';
                 
             const embed = createRankEmbed(title);
             
@@ -794,7 +1025,8 @@ client.on('interactionCreate', async interaction => {
                 const formattedDate = `${matchDate.toLocaleDateString()} ${matchDate.toLocaleTimeString()}`;
                 
                 description += `**Match ${index + 1}** - ${formattedDate}\n`;
-                description += `${getRankEmoji(match.rank)} **${match.rank}**\n`;description += `${match.player1.username} vs ${match.player2.username}\n`;
+                description += `${getRankEmoji(match.rank)} **${match.rank}**\n`;
+                description += `${match.player1.username} vs ${match.player2.username}\n`;
                 description += `Winner: **${match.winner.username}** (${match.winnerScore}-${match.loserScore})\n\n`;
             });
             
@@ -811,22 +1043,176 @@ client.on('interactionCreate', async interaction => {
             return;
         }
         
-        // Admin commands from here
-        if (['scoreboard-addwin', 'scoreboard-removewin', 'scoreboard-setwins'].includes(commandName)) {
-            // Defer reply as we need to check permissions and save data
-            await interaction.deferReply({ ephemeral: true });
+        // Backup command (Admin only)
+        if (commandName === 'scoreboard-backup') {
+            // Defer reply as we need to verify permissions and create backup
+            await interaction.deferReply();
             
             // Check if user has admin role
             if (!(await isAdmin(interaction.member))) {
                 await safeReply(interaction, { 
-                    content: 'You do not have permission to use this command.',
+                    content: 'You do not have permission to use this command. Only admins can create backups.',
                     ephemeral: true 
                 });
                 return;
             }
             
-            // Remove ephemeral since it's authorized - we'll now show the result publicly
-            await interaction.editReply({ content: 'Processing your request...' });
+            // Create the backup
+            try {
+                const success = await createBackup();
+                
+                if (success) {
+                    const embed = createRankEmbed('Backup Created', 
+                        `A backup of the scoreboard data has been successfully created.\n\nBackups are stored in the '${BACKUP_DIR}' directory and kept for future recovery if needed.`);
+                    
+                    await safeReply(interaction, { embeds: [embed] });
+                } else {
+                    await safeReply(interaction, { 
+                        content: 'Failed to create backup. Please check the server logs for more information.',
+                        ephemeral: true 
+                    });
+                }
+            } catch (error) {
+                console.error('Error creating backup from command:', error);
+                await safeReply(interaction, { 
+                    content: `Failed to create backup: ${error.message}`,
+                    ephemeral: true 
+                });
+            }
+            
+            return;
+        }
+        
+        // List backups command (Admin only)
+        if (commandName === 'scoreboard-listbackups') {
+            // Defer reply as we need to verify permissions and list backups
+            await interaction.deferReply();
+            
+            // Check if user has admin role
+            if (!(await isAdmin(interaction.member))) {
+                await safeReply(interaction, { 
+                    content: 'You do not have permission to use this command. Only admins can list backups.',
+                    ephemeral: true 
+                });
+                return;
+            }
+            
+            // Get list of backups
+            const backups = listAvailableBackups();
+            
+            if (backups.length === 0) {
+                await safeReply(interaction, { content: 'No backups found.' });
+                return;
+            }
+            
+            // Create embed for backup list
+            const embed = createRankEmbed('Available Backups', 
+                `There are ${backups.length} backups available. Use \`/scoreboard-restore\` to restore from a backup.`);
+            
+            // Add each backup to the embed
+            backups.forEach((backup, index) => {
+                const creationDate = new Date(backup.ctime);
+                const formattedDate = creationDate.toLocaleString();
+                const sizeKB = (fs.statSync(backup.path).size / 1024).toFixed(2);
+                
+                embed.addFields({
+                    name: `Backup #${index + 1}`,
+                    value: `**Name**: ${backup.name}\n**Created**: ${formattedDate}\n**Size**: ${sizeKB} KB`,
+                    inline: true
+                });
+            });
+            
+            await safeReply(interaction, { embeds: [embed] });
+            return;
+        }
+        
+        // Restore backup command (Admin only)
+        if (commandName === 'scoreboard-restore') {
+            // Defer reply as we need to verify permissions and restore backup
+            await interaction.deferReply();
+            
+            // Check if user has admin role
+            if (!(await isAdmin(interaction.member))) {
+                await safeReply(interaction, { 
+                    content: 'You do not have permission to use this command. Only admins can restore backups.',
+                    ephemeral: true 
+                });
+                return;
+            }
+            
+            try {
+                // Get list of backups
+                const backups = listAvailableBackups();
+                
+                if (backups.length === 0) {
+                    await safeReply(interaction, { content: 'No backups found to restore from.' });
+                    return;
+                }
+                
+                // Get the specified backup
+                const backupOption = interaction.options.getString('backup');
+                let selectedBackup;
+                
+                if (backupOption === 'latest') {
+                    selectedBackup = backups[0]; // First backup is the latest due to sort order
+                } else {
+                    const backupNumber = parseInt(backupOption);
+                    
+                    if (isNaN(backupNumber) || backupNumber < 1 || backupNumber > backups.length) {
+                        await safeReply(interaction, { 
+                            content: `Invalid backup number. Please specify a number between 1 and ${backups.length}, or use "latest".`,
+                            ephemeral: true 
+                        });
+                        return;
+                    }
+                    
+                    selectedBackup = backups[backupNumber - 1]; // Convert to 0-based index
+                }
+                
+                // Just restore without using buttons (simpler approach)
+                // Create a backup of current data first
+                await createBackup();
+                
+                // Now restore from the selected backup
+                const success = restoreFromBackup(selectedBackup.path);
+                
+                if (success) {
+                    const embed = createRankEmbed('Backup Restored', 
+                        `✅ Successfully restored data from backup: **${selectedBackup.name}**\n\n` +
+                        `Created on: ${new Date(selectedBackup.ctime).toLocaleString()}\n\n` +
+                        `A backup of your previous data was created before restoring.`);
+                    
+                    await safeReply(interaction, { embeds: [embed] });
+                } else {
+                    await safeReply(interaction, { 
+                        content: `❌ Failed to restore from backup. Please check the server logs for more information.`,
+                        ephemeral: true
+                    });
+                }
+            } catch (error) {
+                console.error('Error during backup restoration:', error);
+                await safeReply(interaction, { 
+                    content: `❌ Error during backup restoration: ${error.message}`,
+                    ephemeral: true
+                });
+            }
+            
+            return;
+        }
+        
+        // Admin commands for wins management
+        if (['scoreboard-addwin', 'scoreboard-removewin', 'scoreboard-setwins'].includes(commandName)) {
+            // Defer reply as we need to check permissions and save data
+            await interaction.deferReply();
+            
+            // Check if user has admin role
+            if (!(await isAdmin(interaction.member))) {
+                await safeReply(interaction, { 
+                    content: 'You do not have permission to use this command. Only admins can modify wins.',
+                    ephemeral: true 
+                });
+                return;
+            }
             
             const mentionedUser = interaction.options.getUser('user');
             const userId = mentionedUser.id;
@@ -842,8 +1228,14 @@ client.on('interactionCreate', async interaction => {
                 // Add a win
                 data.scores[userId][rank] = (data.scores[userId][rank] || 0) + 1;
                 saveData(data);
+                try {
+                    await createBackup(); // Create a backup after important changes
+                } catch (error) {
+                    console.error('Failed to create backup after adding win:', error);
+                }
                 
-                const embed = createRankEmbed('Win Added', `Added a win for ${mentionedUser.username} in ${getRankEmoji(rank)} **${rank}**.\n\nThey now have **${data.scores[userId][rank]} wins** in this rank.`);
+                const displayName = await getDisplayName(userId, interaction);
+                const embed = createRankEmbed('Win Added', `Added a win for ${displayName} in ${getRankEmoji(rank)} **${rank}**.\n\nThey now have **${data.scores[userId][rank]} wins** in this rank.`);
                 
                 await safeReply(interaction, { embeds: [embed] });
             } else if (commandName === 'scoreboard-removewin') {
@@ -851,14 +1243,20 @@ client.on('interactionCreate', async interaction => {
                 if (data.scores[userId][rank] > 0) {
                     data.scores[userId][rank]--;
                     saveData(data);
+                    try {
+                        await createBackup(); // Create a backup after important changes
+                    } catch (error) {
+                        console.error('Failed to create backup after removing win:', error);
+                    }
                     
-                    const embed = createRankEmbed('Win Removed', `Removed a win from ${mentionedUser.username} in ${getRankEmoji(rank)} **${rank}**.\n\nThey now have **${data.scores[userId][rank]} wins** in this rank.`);
+                    const displayName = await getDisplayName(userId, interaction);
+                    const embed = createRankEmbed('Win Removed', `Removed a win from ${displayName} in ${getRankEmoji(rank)} **${rank}**.\n\nThey now have **${data.scores[userId][rank]} wins** in this rank.`);
                     
                     await safeReply(interaction, { embeds: [embed] });
                 } else {
+                    const displayName = await getDisplayName(userId, interaction);
                     await safeReply(interaction, { 
-                        content: `${mentionedUser.username} has no wins to remove in ${rank}.`,
-                        ephemeral: true 
+                        content: `${displayName} has no wins to remove in ${rank}.`
                     });
                 }
             } else if (commandName === 'scoreboard-setwins') {
@@ -867,8 +1265,14 @@ client.on('interactionCreate', async interaction => {
                 
                 data.scores[userId][rank] = wins;
                 saveData(data);
+                try {
+                    await createBackup(); // Create a backup after important changes
+                } catch (error) {
+                    console.error('Failed to create backup after setting wins:', error);
+                }
                 
-                const embed = createRankEmbed('Wins Updated', `Set ${mentionedUser.username}'s wins in ${getRankEmoji(rank)} **${rank}** to **${wins}**.`);
+                const displayName = await getDisplayName(userId, interaction);
+                const embed = createRankEmbed('Wins Updated', `Set ${displayName}'s wins in ${getRankEmoji(rank)} **${rank}** to **${wins}**.`);
                 
                 await safeReply(interaction, { embeds: [embed] });
             }
@@ -887,8 +1291,7 @@ client.on('interactionCreate', async interaction => {
                 
             if (!interaction.replied && !interaction.deferred) {
                 await interaction.reply({ 
-                    content: errorMessage,
-                    ephemeral: true 
+                    content: errorMessage
                 });
             } else if (interaction.deferred) {
                 await interaction.editReply({ content: errorMessage });
@@ -898,60 +1301,3 @@ client.on('interactionCreate', async interaction => {
         }
     }
 });
-
-// Create a more robust HTTP server for Render.com
-const server = http.createServer((req, res) => {
-    // Log all incoming requests
-    console.log(`[${new Date().toISOString()}] HTTP request: ${req.method} ${req.url}`);
-    
-    if (req.url === '/health') {
-        // Health check endpoint
-        const healthStatus = {
-            status: 'up',
-            timestamp: new Date().toISOString(),
-            discordConnection: client.ws.status === 0 ? 'connected' : 'disconnected',
-            uptime: process.uptime(),
-            readyAt: client.readyAt ? client.readyAt.toISOString() : null,
-            ping: client.ws.ping,
-            memory: process.memoryUsage(),
-            guilds: client.guilds.cache.size,
-            connectionState: client.ws.connection ? client.ws.connection.readyState : 'no connection'
-        };
-        
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(healthStatus, null, 2));
-    } else if (req.url === '/ping') {
-        // Simple ping endpoint that external services can hit
-        console.log(`Received ping at ${new Date().toISOString()}`);
-        
-        // Perform a lightweight ping to Discord API to ensure connection
-        client.guilds.fetch().catch(err => console.error("Error fetching guilds on ping:", err));
-        
-        res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end('pong\n');
-    } else {
-        // Standard response
-        res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end('BO7-Scoreboard Bot is running!\n');
-    }
-});
-
-// Use the PORT environment variable provided by Render.com or default to 3000
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`HTTP server running on port ${PORT}`);
-    console.log(`Health endpoint: http://localhost:${PORT}/health`);
-    console.log(`Ping endpoint: http://localhost:${PORT}/ping`);
-});
-
-// Login to Discord
-if (!process.env.DISCORD_TOKEN) {
-    console.error('DISCORD_TOKEN environment variable is not set!');
-    console.error('Please set your discord token as an environment variable or in a .env file');
-    process.exit(1);
-}
-
-client.login(process.env.DISCORD_TOKEN);
-
-// Log a message about admin role configuration
-console.log(`Bot is configured to recognize users with the "${config.adminRoleName}" role as admins`);
