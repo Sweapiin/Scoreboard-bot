@@ -3,7 +3,7 @@ const { Client, GatewayIntentBits, Partials, EmbedBuilder, PermissionFlagsBits, 
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
 // Try to load environment variables from .env file if dotenv is available
 try {
