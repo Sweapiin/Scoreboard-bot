@@ -569,8 +569,11 @@ client.once('ready', () => {
             res.end('BO7-Scoreboard Bot is running!');
         }
     });
+
+    // Add clear logging BEFORE and AFTER server start
+    console.log(`Attempting to start HTTP server on port ${PORT}...`);
     server.listen(PORT, () => {
-        console.log(`HTTP server started on port ${PORT}`);
+        console.log(`HTTP server successfully started on port ${PORT}`);
     });
 
     // More robust keep-alive mechanism
@@ -1313,4 +1316,11 @@ client.on('interactionCreate', async interaction => {
             console.error('Failed to send error message:', replyError);
         }
     }
+});
+
+console.log('Attempting to log in to Discord...');
+client.login(process.env.DISCORD_TOKEN).then(() => {
+    console.log('Successfully logged in to Discord');
+}).catch(error => {
+    console.error('Failed to log in to Discord:', error);
 });
